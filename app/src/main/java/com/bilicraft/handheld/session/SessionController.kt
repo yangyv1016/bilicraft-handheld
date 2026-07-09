@@ -58,6 +58,7 @@ class SessionController(
     private var signingMode: ChatSigningMode = ChatSigningMode.UNSIGNED
     private var reconnectAllowed = true
     private var pumpJob: Job? = null
+    private var reconnectJob: Job? = null
 
     init {
         pluginManager.installBuiltins()
@@ -71,6 +72,12 @@ class SessionController(
 
     /** 启动连接。version 为「自动识别」时先 ping 拿协议号。 */
     fun start(address: ServerAddress, version: McVersion, mode: ChatSigningMode) {
+        reconnectAllowed = false
+        reconnectJob?.cancel()
+        pumpJob?.cancel()
+        val previousClient = client
+        client = null
+        previousClient?.disconnect()
         target = address
         selectedVersion = version
         signingMode = mode
@@ -80,9 +87,11 @@ class SessionController(
 
     fun stop() {
         reconnectAllowed = false
+        reconnectJob?.cancel()
         pumpJob?.cancel()
-        client?.disconnect()
+        val previousClient = client
         client = null
+        previousClient?.disconnect()
         _connState.value = ConnectionState.Disconnected
     }
 
@@ -137,7 +146,14 @@ class SessionController(
         // 泵：把 client 的状态与聊天接到本控制器
         pumpJob?.cancel()
         pumpJob = scope.launch {
-            launch { mc.state.collect { onConnState(it, attempt) } }
+            launch {
+                var connectionStarted = false
+                mc.state.collect { state ->
+                    if (state is ConnectionState.Disconnected && !connectionStarted) return@collect
+                    connectionStarted = true
+                    onConnState(state, attempt)
+                }
+            }
             launch { mc.incoming.collect { ev ->
                 appendChat(ev)
                 pluginManager.dispatchChat(ev)   // 广播给插件
@@ -160,21 +176,28 @@ class SessionController(
     private fun onConnState(state: ConnectionState, attempt: Int) {
         _connState.value = state
         when (state) {
-            is ConnectionState.Connected -> appendSystem("已连接到服务器")
+            is ConnectionState.Connected -> {
+                reconnectJob?.cancel()
+                appendSystem("已连接到服务器")
+            }
             is ConnectionState.Failed -> {
                 appendSystem("连接失败：${state.reason}")
-                scope.launch { scheduleReconnect(attempt) }
+                if (state.retriable) scheduleReconnect(attempt)
+                else {
+                    reconnectAllowed = false
+                    reconnectJob?.cancel()
+                }
             }
             is ConnectionState.Disconnected -> {
-                if (reconnectAllowed) scope.launch { scheduleReconnect(attempt) }
+                if (reconnectAllowed) scheduleReconnect(attempt)
             }
             else -> Unit
         }
     }
 
     /** 指数退避重连 */
-    private suspend fun scheduleReconnect(prevAttempt: Int) {
-        if (!reconnectAllowed) return
+    private fun scheduleReconnect(prevAttempt: Int) {
+        if (!reconnectAllowed || reconnectJob?.isActive == true) return
         val attempt = prevAttempt + 1
         if (attempt > MAX_RECONNECT) {
             appendSystem("已达最大重连次数（$MAX_RECONNECT），停止重连")
@@ -184,8 +207,13 @@ class SessionController(
         val backoff = minOf(30_000L, 1000L * (1L shl attempt))  // 2s,4s,8s… 上限30s
         _connState.value = ConnectionState.Reconnecting(attempt)
         appendSystem("第 $attempt 次重连，${backoff / 1000}s 后…")
-        delay(backoff)
-        if (reconnectAllowed) connectOnce(attempt)
+        reconnectJob = scope.launch {
+            delay(backoff)
+            if (reconnectAllowed) {
+                reconnectJob = null
+                connectOnce(attempt)
+            }
+        }
     }
 
     private fun appendChat(ev: ChatEvent) {

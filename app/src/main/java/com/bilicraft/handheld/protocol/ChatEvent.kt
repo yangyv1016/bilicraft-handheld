@@ -22,7 +22,7 @@ sealed interface ConnectionState {
     data object Connecting : ConnectionState
     data object LoggingIn : ConnectionState          // 登录/加密握手阶段
     data class Connected(val serverBrand: String?) : ConnectionState
-    data class Failed(val reason: String) : ConnectionState
+    data class Failed(val reason: String, val retriable: Boolean = true) : ConnectionState
     data class Reconnecting(val attempt: Int) : ConnectionState
 }
 

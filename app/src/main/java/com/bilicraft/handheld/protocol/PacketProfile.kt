@@ -25,8 +25,10 @@ data class PacketProfile(
     val cbEncryptionRequest: Int,
     val cbLoginSuccess: Int,
     val cbSetCompression: Int,
+    val cbConfigDisconnect: Int?,
     val cbConfigFinish: Int?,             // config 阶段结束（进入 play）
     val cbConfigKeepAlive: Int?,
+    val cbPlayDisconnect: Int,
     val cbKeepAlivePlay: Int,
     val cbChatCandidates: Set<Int>        // 各类聊天/系统消息包 id（版本差异大，用集合宽松匹配）
 ) {
@@ -47,8 +49,10 @@ data class PacketProfile(
             cbEncryptionRequest = 0x01,
             cbLoginSuccess = 0x02,
             cbSetCompression = 0x03,
-            cbConfigFinish = 0x02,
+            cbConfigDisconnect = 0x02,
+            cbConfigFinish = 0x03,
             cbConfigKeepAlive = 0x04,
+            cbPlayDisconnect = 0x1D,
             cbKeepAlivePlay = 0x26,
             cbChatCandidates = setOf(0x6C, 0x6D, 0x70, 0x73)
         )
@@ -65,8 +69,10 @@ data class PacketProfile(
             cbEncryptionRequest = 0x01,
             cbLoginSuccess = 0x02,
             cbSetCompression = 0x03,
+            cbConfigDisconnect = null,
             cbConfigFinish = null,
             cbConfigKeepAlive = null,
+            cbPlayDisconnect = 0x1A,
             cbKeepAlivePlay = 0x21,
             cbChatCandidates = setOf(0x0E, 0x0F, 0x5F, 0x62, 0x64)
         )

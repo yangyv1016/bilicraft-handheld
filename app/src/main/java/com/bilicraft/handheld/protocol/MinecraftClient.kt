@@ -193,7 +193,7 @@ class MinecraftClient(
                     else -> Unit
                 }
             } catch (e: Exception) {
-                _state.value = ConnectionState.Failed("解析错误：${e.message}")
+                _state.value = ConnectionState.Failed("解析错误：${e.message}", retriable = false)
                 ctx.close()
             } finally {
                 buf.release()
@@ -209,9 +209,7 @@ class MinecraftClient(
                 profile.cbEncryptionRequest -> doEncryption(ctx, buf)
                 profile.cbLoginSuccess -> onLoginSuccess(ctx)
                 0x00 -> {  // login disconnect
-                    val reason = runCatching { buf.readString() }.getOrDefault("被服务器拒绝")
-                    _state.value = ConnectionState.Failed(reason)
-                    ctx.close()
+                    failWithServerReason(ctx, buf, "被服务器拒绝")
                 }
             }
         }
@@ -231,15 +229,16 @@ class MinecraftClient(
         }
 
         private fun handleConfiguration(ctx: ChannelHandlerContext, packetId: Int, buf: ByteBuf) {
-            when (packetId) {
-                profile.cbConfigKeepAlive -> {
+            when {
+                packetId == profile.cbConfigDisconnect -> failWithServerReason(ctx, buf, "配置阶段被服务器断开")
+                packetId == profile.cbConfigKeepAlive -> {
                     // 回 keepalive（config 阶段），id 与收到的一致
                     val id = buf.readLong()
                     val ka = ctx.alloc().buffer().writeVarInt(packetId)
                     ka.writeLong(id)
                     ctx.writeAndFlush(ka)
                 }
-                profile.cbConfigFinish -> {
+                packetId == profile.cbConfigFinish -> {
                     // 确认 config 结束，进入 play
                     profile.sbConfigFinishAck?.let {
                         val fin = ctx.alloc().buffer().writeVarInt(it)
@@ -254,6 +253,7 @@ class MinecraftClient(
 
         private fun handlePlay(ctx: ChannelHandlerContext, packetId: Int, buf: ByteBuf) {
             when (packetId) {
+                profile.cbPlayDisconnect -> failWithServerReason(ctx, buf, "被服务器断开")
                 profile.cbKeepAlivePlay -> {
                     val id = buf.readLong()
                     val ka = ctx.alloc().buffer().writeVarInt(profile.sbKeepAlivePlay)
@@ -262,6 +262,13 @@ class MinecraftClient(
                 }
                 in profile.cbChatCandidates -> emitChat(buf)
             }
+        }
+
+        private fun failWithServerReason(ctx: ChannelHandlerContext, buf: ByteBuf, fallback: String) {
+            val rawReason = runCatching { buf.readString() }.getOrDefault(fallback)
+            val plainReason = ChatComponent.toPlainText(rawReason).ifBlank { rawReason }
+            _state.value = ConnectionState.Failed(plainReason, retriable = false)
+            ctx.close()
         }
 
         /** 把各版本聊天包尽量归一化为 ChatEvent。宽松解析：读首个字符串当作消息组件。 */
@@ -283,7 +290,7 @@ class MinecraftClient(
             // 向 Mojang sessionserver 报到，证明身份
             val hash = McCrypto.serverHash(serverId, secret, pubKey)
             if (!joinServer(hash)) {
-                _state.value = ConnectionState.Failed("会话校验失败（joinServer）")
+                _state.value = ConnectionState.Failed("会话校验失败（joinServer）", retriable = false)
                 ctx.close()
                 return
             }

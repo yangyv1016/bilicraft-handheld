@@ -1,0 +1,4 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Compose 应用使用无 ActionBar 主题；配色由 Compose 侧 MaterialTheme 接管 -->
+    <style name="Theme.BilicraftHandheld" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

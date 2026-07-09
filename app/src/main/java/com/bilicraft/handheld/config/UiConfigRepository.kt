@@ -175,13 +175,13 @@ class UiConfigRepository(context: Context) {
         QuickToolLink(
             id = "bilicraft-map",
             title = "卫星地图",
-            url = "https://map.bilicraft.com/s2/raphael/",
+            url = "https://map.bilicraft.com/s2/hyperion/#",
             description = "碧玺服务器在线地图"
         ),
         QuickToolLink(
             id = "bilicraft-wiki",
             title = "Wiki",
-            url = "https://www.yuque.com/sananarx/bilicraft",
+            url = "https://www.yuque.com/sasanarx/bilicraft",
             description = "服务器规则与玩法资料"
         ),
         QuickToolLink(

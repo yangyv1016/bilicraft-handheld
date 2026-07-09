@@ -614,9 +614,15 @@ private fun SettingsScreen(vm: MainViewModel) {
             )
         }
 
-        item { SectionTitle("插件管理") }
+        item { SectionTitle("插件功能") }
         if (pluginNames.isEmpty()) {
-            item { Text("暂无已加载插件", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
+            item {
+                Text(
+                    "插件功能暂未开启",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         } else {
             items(pluginNames) { name ->
                 var enabled by remember(name) { mutableStateOf(true) }

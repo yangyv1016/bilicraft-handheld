@@ -61,7 +61,7 @@ class SessionController(
     private var reconnectJob: Job? = null
 
     init {
-        pluginManager.installBuiltins()
+        if (PLUGINS_ENABLED) pluginManager.installBuiltins()
         // 插件错误也进日志，用户可见但不崩溃
         scope.launch {
             pluginManager.errors.collect { e ->
@@ -155,10 +155,12 @@ class SessionController(
                     onConnState(state, attempt)
                 }
             }
-            launch { mc.incoming.collect { ev ->
-                appendChat(ev)
-                pluginManager.dispatchChat(ev)   // 广播给插件
-            } }
+            launch {
+                mc.incoming.collect { ev ->
+                    appendChat(ev)
+                    if (PLUGINS_ENABLED) pluginManager.dispatchChat(ev)
+                }
+            }
         }
         mc.connect(addr)
     }
@@ -232,6 +234,8 @@ class SessionController(
     }
 
     private companion object {
+        // 正式包先关闭插件链路，避免内置示例自动回复被加载。
+        const val PLUGINS_ENABLED = false
         const val MAX_RECONNECT = 6
         const val MAX_LOG = 500
     }

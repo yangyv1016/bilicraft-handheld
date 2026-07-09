@@ -27,6 +27,12 @@ class AuthClient(private val clientId: String) {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    private val certificateHttp = http.newBuilder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .callTimeout(15, TimeUnit.SECONDS)
+        .build()
+
     /** 结果类型：成功携带值，失败携带原因。避免异常穿透到编排层。 */
     sealed interface Step<out T> {
         data class Ok<T>(val value: T) : Step<T>
@@ -228,7 +234,7 @@ class AuthClient(private val clientId: String) {
                 .header("Authorization", "Bearer $mcAccessToken")
                 .post(ByteArray(0).toRequestBody(null))
                 .build()
-            execJson(req) { j ->
+            execJson(certificateHttp, req) { j ->
                 val keyPair = j.getJSONObject("keyPair")
                 PlayerCertificate(
                     privateKey = parsePrivateKey(keyPair.getString("privateKey")),
@@ -265,8 +271,11 @@ class AuthClient(private val clientId: String) {
     // ---- 内部工具：执行请求 + 解析，异常转 Err ----
 
     private inline fun <T> execJson(req: Request, parse: (JSONObject) -> T): Step<T> =
+        execJson(http, req, parse)
+
+    private inline fun <T> execJson(client: OkHttpClient, req: Request, parse: (JSONObject) -> T): Step<T> =
         try {
-            http.newCall(req).execute().use { resp ->
+            client.newCall(req).execute().use { resp ->
                 val text = resp.body?.string().orEmpty()
                 if (resp.isSuccessful) {
                     Step.Ok(parse(JSONObject(text)))

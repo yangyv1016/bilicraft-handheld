@@ -328,8 +328,21 @@ class MinecraftClient(
                     ctx.writeAndFlush(ka)
                 }
                 PacketKey.CB_SYSTEM_CHAT, PacketKey.CB_PLAYER_CHAT -> emitChat(buf)
+                PacketKey.CB_START_CONFIGURATION -> acknowledgeConfiguration(ctx)
                 else -> Unit
             }
+        }
+
+        /**
+         * 代理服/群组服切换子服务器时，服务端会在 PLAY 阶段发 Start Configuration，
+         * 客户端必须回 Acknowledge Configuration 并切回 CONFIGURATION；否则服务端会等待超时后断开。
+         */
+        private fun acknowledgeConfiguration(ctx: ChannelHandlerContext) {
+            val sbId = palette.sbId(PacketKey.SB_ACKNOWLEDGE_CONFIGURATION) ?: return
+            val ack = ctx.alloc().buffer().writeVarInt(sbId)
+            ctx.writeAndFlush(ack)
+            chatSessionReported = false
+            phase = Phase.CONFIGURATION
         }
 
         /**

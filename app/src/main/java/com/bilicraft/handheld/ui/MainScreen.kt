@@ -63,6 +63,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -142,12 +143,12 @@ fun MainScreen(vm: MainViewModel) {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun ServerSessionsScreen(vm: MainViewModel) {
-    val conn by vm.connState.collectAsStateWithLifecycle()
-    val log by vm.chatLog.collectAsStateWithLifecycle()
+    val runtime by vm.serverRuntime.collectAsStateWithLifecycle()
     val servers by vm.servers.collectAsStateWithLifecycle()
     val versions by vm.versions.collectAsStateWithLifecycle()
     val selectedVersion by vm.selectedVersion.collectAsStateWithLifecycle()
     val forceSigning by vm.forceSigning.collectAsStateWithLifecycle()
+    val preferences by vm.preferences.collectAsStateWithLifecycle()
 
     var selectedIndex by remember { mutableIntStateOf(0) }
     var editingServer by remember { mutableStateOf<ServerConfig?>(null) }
@@ -201,13 +202,18 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
 
             val selectedServer = servers.getOrNull(selectedIndex)
             if (selectedServer != null) {
+                val selectedConn = runtime.connectionStates[selectedServer.id] ?: ConnectionState.Disconnected
+                val selectedLog = runtime.chatLogs[selectedServer.id].orEmpty()
+                val isActiveServer = runtime.activeServerId == selectedServer.id
                 ServerSessionPage(
                     server = selectedServer,
-                    conn = conn,
-                    log = log,
+                    conn = selectedConn,
+                    log = selectedLog,
+                    isActiveServer = isActiveServer,
+                    chatAutoScroll = preferences.chatAutoScroll,
                     onConnect = { vm.connect(selectedServer) },
                     onStop = vm::stopConnection,
-                    onSend = vm::sendChat,
+                    onSend = { vm.sendChat(selectedServer.id, it) },
                     onEdit = { editingServer = selectedServer }
                 )
             }
@@ -281,13 +287,16 @@ private fun ServerSessionPage(
     server: ServerConfig,
     conn: ConnectionState,
     log: List<ChatEvent>,
+    isActiveServer: Boolean,
+    chatAutoScroll: Boolean,
     onConnect: () -> Unit,
     onStop: () -> Unit,
     onSend: (String) -> Unit,
     onEdit: () -> Unit
 ) {
-    val connected = conn is ConnectionState.Connected
-    var input by remember { mutableStateOf("") }
+    val connected = isActiveServer && conn is ConnectionState.Connected
+    val connecting = isActiveServer && conn !is ConnectionState.Disconnected && conn !is ConnectionState.Failed
+    var input by remember(server.id) { mutableStateOf("") }
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
@@ -311,12 +320,12 @@ private fun ServerSessionPage(
                 }
                 Spacer(Modifier.height(12.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onConnect, enabled = !connected, modifier = Modifier.weight(1f)) {
+                    Button(onClick = onConnect, enabled = !connecting, modifier = Modifier.weight(1f)) {
                         Icon(Icons.Default.SportsEsports, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text("连接")
                     }
-                    OutlinedButton(onClick = onStop, modifier = Modifier.weight(1f)) {
+                    OutlinedButton(onClick = onStop, enabled = isActiveServer, modifier = Modifier.weight(1f)) {
                         Icon(Icons.Default.Stop, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text("断开")
@@ -326,7 +335,9 @@ private fun ServerSessionPage(
         }
 
         Spacer(Modifier.height(12.dp))
-        ChatLog(log = log, modifier = Modifier.weight(1f).fillMaxWidth())
+        key(server.id) {
+            ChatLog(log = log, autoScroll = chatAutoScroll, modifier = Modifier.weight(1f).fillMaxWidth())
+        }
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
@@ -351,10 +362,10 @@ private fun ServerSessionPage(
 }
 
 @Composable
-private fun ChatLog(log: List<ChatEvent>, modifier: Modifier = Modifier) {
+private fun ChatLog(log: List<ChatEvent>, autoScroll: Boolean, modifier: Modifier = Modifier) {
     val listState = rememberLazyListState()
-    LaunchedEffect(log.size) {
-        if (log.isNotEmpty()) listState.animateScrollToItem(log.size - 1)
+    LaunchedEffect(log.size, autoScroll) {
+        if (autoScroll && log.isNotEmpty()) listState.animateScrollToItem(log.size - 1)
     }
     LazyColumn(
         state = listState,
@@ -591,6 +602,7 @@ private fun ToolEditorDialog(
 @Composable
 private fun SettingsScreen(vm: MainViewModel) {
     val pluginNames = vm.pluginNames
+    val preferences by vm.preferences.collectAsStateWithLifecycle()
 
     LazyColumn(Modifier.fillMaxSize()) {
         item { CenterAlignedTopAppBar(title = { Text("设置") }) }
@@ -611,6 +623,20 @@ private fun SettingsScreen(vm: MainViewModel) {
                     SettingAction("刷新 Token", Icons.Default.Refresh, vm::refreshToken),
                     SettingAction("退出登录", Icons.Default.Delete, vm::logout)
                 )
+            )
+        }
+
+        item { SectionTitle("聊天显示") }
+        item {
+            ListItem(
+                headlineContent = { Text("自动滚动到最新聊天") },
+                supportingContent = { Text("关闭后，新消息不会打断你查看历史聊天。") },
+                trailingContent = {
+                    Switch(
+                        checked = preferences.chatAutoScroll,
+                        onCheckedChange = vm::setChatAutoScroll
+                    )
+                }
             )
         }
 

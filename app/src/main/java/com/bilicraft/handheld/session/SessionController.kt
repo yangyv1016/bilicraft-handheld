@@ -17,12 +17,30 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withTimeoutOrNull
+
+/** 当前单会话向 UI 暴露的带归属事件。 */
+sealed interface SessionEvent {
+    val serverId: String?
+
+    data class State(
+        override val serverId: String?,
+        val state: ConnectionState
+    ) : SessionEvent
+
+    data class Chat(
+        override val serverId: String?,
+        val event: ChatEvent
+    ) : SessionEvent
+}
 
 /**
  * 会话运行核心：编排「登录态 → 版本解析 → 连接 → 插件分发 → 断线重连」。
@@ -45,6 +63,9 @@ class SessionController(
     private val _connState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connState: StateFlow<ConnectionState> = _connState.asStateFlow()
 
+    private val _events = MutableSharedFlow<SessionEvent>(extraBufferCapacity = 256)
+    val events: SharedFlow<SessionEvent> = _events.asSharedFlow()
+
     // 插件宿主：把插件的 sendChat 接到当前 client
     private val pluginHost = object : PluginHost {
         override fun sendChat(text: String) { client?.sendChat(text) }
@@ -53,9 +74,8 @@ class SessionController(
     val pluginManager = PluginManager(pluginHost)
 
     private var client: MinecraftClient? = null
-    private var target: ServerAddress? = null
-    private var selectedVersion: McVersion? = null
-    private var signingMode: ChatSigningMode = ChatSigningMode.UNSIGNED
+    private var activeRequest: ConnectionRequest? = null
+    private var requestSeq = 0L
     private var reconnectAllowed = true
     private var pumpJob: Job? = null
     private var reconnectJob: Job? = null
@@ -71,28 +91,31 @@ class SessionController(
     }
 
     /** 启动连接。version 为「自动识别」时先 ping 拿协议号。 */
-    fun start(address: ServerAddress, version: McVersion, mode: ChatSigningMode) {
+    fun start(serverId: String?, address: ServerAddress, version: McVersion, mode: ChatSigningMode) {
         reconnectAllowed = false
         reconnectJob?.cancel()
         pumpJob?.cancel()
         val previousClient = client
         client = null
+        val request = ConnectionRequest(++requestSeq, serverId, address, version, mode)
+        activeRequest = request
+        publishState(request, ConnectionState.Connecting)
         previousClient?.disconnect()
-        target = address
-        selectedVersion = version
-        signingMode = mode
         reconnectAllowed = true
-        scope.launch { connectOnce(attempt = 0) }
+        scope.launch { connectOnce(request, attempt = 0) }
     }
 
     fun stop() {
         reconnectAllowed = false
         reconnectJob?.cancel()
         pumpJob?.cancel()
+        val stoppedServerId = activeRequest?.serverId
+        activeRequest = null
+        requestSeq++
         val previousClient = client
         client = null
         previousClient?.disconnect()
-        _connState.value = ConnectionState.Disconnected
+        publishState(stoppedServerId, ConnectionState.Disconnected)
     }
 
     fun sendChat(text: String) {
@@ -102,36 +125,44 @@ class SessionController(
 
     // ---- 内部编排 ----
 
-    private suspend fun connectOnce(attempt: Int) {
-        val addr = target ?: return
-        val version = selectedVersion ?: return
+    private suspend fun connectOnce(request: ConnectionRequest, attempt: Int) {
+        if (!request.isCurrent()) return
+        val addr = request.address
+        val version = request.version
 
         // 解析协议号：自动识别 → ping
-        val protocol = resolveProtocol(addr, version)
+        val protocol = resolveProtocol(request, addr, version)
+        if (!request.isCurrent()) return
         if (protocol == null) {
-            appendSystem("连接失败：无法确定协议版本（内置表无「${version.id}」，且自动识别未获取到版本，请改用「自动识别」或选择真实存在的版本）")
-            _connState.value = ConnectionState.Failed("无法确定协议版本")
-            scheduleReconnect(attempt)
+            publishSystem(request, "连接失败：无法确定协议版本（内置表无「${version.id}」，且自动识别未获取到版本，请改用「自动识别」或选择真实存在的版本）")
+            publishState(request, ConnectionState.Failed("无法确定协议版本"))
+            scheduleReconnect(request, attempt)
             return
         }
 
         val session = authManager.currentSession()
+        if (!request.isCurrent()) return
         if (session == null) {
-            _connState.value = ConnectionState.Failed("未登录")
+            publishState(request, ConnectionState.Failed("未登录"))
             return
         }
 
         // 强制签名模式：连接前取玩家证书（私钥只在内存流转）
-        val certificate = if (signingMode == ChatSigningMode.SIGNED) {
-            appendSystem("正在获取签名证书…")
-            when (val r = authManager.fetchCertificate(session.mcAccessToken)) {
+        val certificate = if (request.signingMode == ChatSigningMode.SIGNED) {
+            publishSystem(request, "正在获取签名证书…")
+            when (val r = withTimeoutOrNull(CERTIFICATE_FETCH_TIMEOUT_MS) { authManager.fetchCertificate(session.mcAccessToken) }) {
                 is com.bilicraft.handheld.auth.AuthClient.Step.Ok -> r.value
                 is com.bilicraft.handheld.auth.AuthClient.Step.Err -> {
-                    appendSystem("证书获取失败：${r.reason}，回退为未签名模式")
+                    if (request.isCurrent()) publishSystem(request, "证书获取失败：${r.reason}，回退为未签名模式")
+                    null
+                }
+                null -> {
+                    if (request.isCurrent()) publishSystem(request, "证书获取超时，回退为未签名模式")
                     null
                 }
             }
         } else null
+        if (!request.isCurrent()) return
 
         val mc = MinecraftClient(
             palette = PaletteRegistry.forProtocol(protocol),
@@ -150,14 +181,16 @@ class SessionController(
             launch {
                 var connectionStarted = false
                 mc.state.collect { state ->
+                    if (!request.isCurrent()) return@collect
                     if (state is ConnectionState.Disconnected && !connectionStarted) return@collect
                     connectionStarted = true
-                    onConnState(state, attempt)
+                    onConnState(request, state, attempt)
                 }
             }
             launch {
                 mc.incoming.collect { ev ->
-                    appendChat(ev)
+                    if (!request.isCurrent()) return@collect
+                    publishChat(request, ev)
                     if (PLUGINS_ENABLED) pluginManager.dispatchChat(ev)
                 }
             }
@@ -166,57 +199,78 @@ class SessionController(
     }
 
     /** 协议号解析：内置表命中直接用；自动识别 ping 服务器 */
-    private suspend fun resolveProtocol(addr: ServerAddress, version: McVersion): Int? {
+    private suspend fun resolveProtocol(request: ConnectionRequest, addr: ServerAddress, version: McVersion): Int? {
         versionRepo.resolveProtocol(version)?.let { return it }
         // 走到这里说明是自动识别或未知版本 → ping
-        appendSystem("正在自动识别服务器版本…")
+        publishSystem(request, "正在自动识别服务器版本…")
         val status = ServerPinger().ping(addr).getOrNull()
+        if (!request.isCurrent()) return null
         return status?.protocol?.takeIf { it > 0 }?.also {
-            appendSystem("识别到服务器版本：${status.versionName}（协议 $it）")
+            publishSystem(request, "识别到服务器版本：${status.versionName}（协议 $it）")
         }
     }
 
-    private fun onConnState(state: ConnectionState, attempt: Int) {
-        _connState.value = state
+    private fun onConnState(request: ConnectionRequest, state: ConnectionState, attempt: Int) {
+        publishState(request, state)
         when (state) {
             is ConnectionState.Connected -> {
                 reconnectJob?.cancel()
-                appendSystem("已连接到服务器")
+                publishSystem(request, "已连接到服务器")
             }
             is ConnectionState.Failed -> {
-                appendSystem("连接失败：${state.reason}")
-                if (state.retriable) scheduleReconnect(attempt)
+                publishSystem(request, "连接失败：${state.reason}")
+                if (state.retriable) scheduleReconnect(request, attempt)
                 else {
                     reconnectAllowed = false
                     reconnectJob?.cancel()
                 }
             }
             is ConnectionState.Disconnected -> {
-                if (reconnectAllowed) scheduleReconnect(attempt)
+                if (reconnectAllowed) scheduleReconnect(request, attempt)
             }
             else -> Unit
         }
     }
 
     /** 指数退避重连 */
-    private fun scheduleReconnect(prevAttempt: Int) {
-        if (!reconnectAllowed || reconnectJob?.isActive == true) return
+    private fun scheduleReconnect(request: ConnectionRequest, prevAttempt: Int) {
+        if (!request.isCurrent() || !reconnectAllowed || reconnectJob?.isActive == true) return
         val attempt = prevAttempt + 1
         if (attempt > MAX_RECONNECT) {
-            appendSystem("已达最大重连次数（$MAX_RECONNECT），停止重连")
+            publishSystem(request, "已达最大重连次数（$MAX_RECONNECT），停止重连")
             reconnectAllowed = false
             return
         }
         val backoff = minOf(30_000L, 1000L * (1L shl attempt))  // 2s,4s,8s… 上限30s
-        _connState.value = ConnectionState.Reconnecting(attempt)
-        appendSystem("第 $attempt 次重连，${backoff / 1000}s 后…")
+        publishState(request, ConnectionState.Reconnecting(attempt))
+        publishSystem(request, "第 $attempt 次重连，${backoff / 1000}s 后…")
         reconnectJob = scope.launch {
             delay(backoff)
-            if (reconnectAllowed) {
+            if (request.isCurrent() && reconnectAllowed) {
                 reconnectJob = null
-                connectOnce(attempt)
+                connectOnce(request, attempt)
             }
         }
+    }
+
+    private fun publishState(request: ConnectionRequest, state: ConnectionState) {
+        if (!request.isCurrent()) return
+        publishState(request.serverId, state)
+    }
+
+    private fun publishState(serverId: String?, state: ConnectionState) {
+        _connState.value = state
+        _events.tryEmit(SessionEvent.State(serverId, state))
+    }
+
+    private fun publishChat(request: ConnectionRequest, ev: ChatEvent) {
+        if (!request.isCurrent()) return
+        appendChat(ev)
+        _events.tryEmit(SessionEvent.Chat(request.serverId, ev))
+    }
+
+    private fun publishSystem(request: ConnectionRequest, text: String) {
+        publishChat(request, ChatEvent(plainText = text, rawJson = text, sender = null))
     }
 
     private fun appendChat(ev: ChatEvent) {
@@ -226,6 +280,16 @@ class SessionController(
     private fun appendSystem(text: String) {
         appendChat(ChatEvent(plainText = text, rawJson = text, sender = null))
     }
+
+    private fun ConnectionRequest.isCurrent(): Boolean = activeRequest?.seq == seq
+
+    private data class ConnectionRequest(
+        val seq: Long,
+        val serverId: String?,
+        val address: ServerAddress,
+        val version: McVersion,
+        val signingMode: ChatSigningMode
+    )
 
     fun dispose() {
         stop()
@@ -238,5 +302,6 @@ class SessionController(
         const val PLUGINS_ENABLED = false
         const val MAX_RECONNECT = 6
         const val MAX_LOG = 500
+        const val CERTIFICATE_FETCH_TIMEOUT_MS = 15_000L
     }
 }

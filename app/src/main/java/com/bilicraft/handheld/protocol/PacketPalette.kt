@@ -39,6 +39,7 @@ enum class PacketKey(val phase: PacketPhase) {
     SB_CHAT_MESSAGE(PacketPhase.PLAY),                  // play 阶段发送聊天
     SB_CHAT_COMMAND(PacketPhase.PLAY),                  // 1.19+ 斜杠命令走独立包（非 Chat Message）
     SB_CHAT_SESSION_UPDATE(PacketPhase.PLAY),           // 1.19.3+ session 体系：上报玩家公钥/会话
+    SB_ACKNOWLEDGE_CONFIGURATION(PacketPhase.PLAY),     // 1.20.2+ 子服/世界切换：确认从 play 回到 configuration
 
     // --- clientbound ---
     CB_ENCRYPTION_REQUEST(PacketPhase.LOGIN),
@@ -54,6 +55,7 @@ enum class PacketKey(val phase: PacketPhase) {
     CB_KEEP_ALIVE_PLAY(PacketPhase.PLAY),
     CB_SYSTEM_CHAT(PacketPhase.PLAY),                   // 系统消息（服务器广播、命令回显等，多数聊天走这里）
     CB_PLAYER_CHAT(PacketPhase.PLAY),                   // 玩家签名聊天（结构复杂，这里只提取可读文本）
+    CB_START_CONFIGURATION(PacketPhase.PLAY),           // 1.20.2+ 代理服切换子服时要求回到 configuration
 }
 
 /**
@@ -123,6 +125,7 @@ object PaletteRegistry {
                 PacketKey.SB_CHAT_MESSAGE to play.sbChatMessage,
                 PacketKey.SB_CHAT_COMMAND to play.sbChatCommand,
                 PacketKey.SB_CHAT_SESSION_UPDATE to play.sbChatSessionUpdate,
+                PacketKey.SB_ACKNOWLEDGE_CONFIGURATION to play.sbAcknowledgeConfiguration,
             ),
             cbMap = mapOf(
                 PacketKey.CB_ENCRYPTION_REQUEST to 0x01,
@@ -138,6 +141,7 @@ object PaletteRegistry {
                 PacketKey.CB_KEEP_ALIVE_PLAY to play.cbKeepAlive,
                 PacketKey.CB_SYSTEM_CHAT to play.cbSystemChat,
                 PacketKey.CB_PLAYER_CHAT to play.cbPlayerChat,
+                PacketKey.CB_START_CONFIGURATION to play.cbStartConfiguration,
             )
         )
     }
@@ -152,11 +156,13 @@ object PaletteRegistry {
         val sbChatCommand: Int,          // SignedChatCommand（在线模式 1.20.6+）/ ChatCommand
         val sbKeepAlive: Int,
         val sbChatSessionUpdate: Int,
+        val sbAcknowledgeConfiguration: Int,
         val cbDisconnect: Int,
         val cbKeepAlive: Int,
         val cbSystemChat: Int,
         val cbPlayerChat: Int,
         val cbJoinGame: Int,
+        val cbStartConfiguration: Int,
     )
 
     private fun modernPlayChatIds(protocol: Int): PlayChatIds = when {
@@ -166,11 +172,13 @@ object PaletteRegistry {
             sbChatCommand = 0x08,
             sbKeepAlive = 0x1C,
             sbChatSessionUpdate = 0x0A,
+            sbAcknowledgeConfiguration = 0x10,
             cbDisconnect = 0x20,
             cbKeepAlive = 0x2C,
             cbSystemChat = 0x79,
             cbPlayerChat = 0x41,
             cbJoinGame = 0x31,
+            cbStartConfiguration = 0x76,
         )
         // 773–774：1.21.9 / 1.21.10 / 1.21.11（MCC Palette1219）
         protocol >= 773 -> PlayChatIds(
@@ -178,11 +186,13 @@ object PaletteRegistry {
             sbChatCommand = 0x07,
             sbKeepAlive = 0x1B,
             sbChatSessionUpdate = 0x09,
+            sbAcknowledgeConfiguration = 0x0F,
             cbDisconnect = 0x20,
             cbKeepAlive = 0x2B,
             cbSystemChat = 0x77,
             cbPlayerChat = 0x3F,
             cbJoinGame = 0x30,
+            cbStartConfiguration = 0x74,
         )
         // 771–772：1.21.6 / 1.21.7 / 1.21.8（MCC Palette1216）
         protocol >= 771 -> PlayChatIds(
@@ -190,11 +200,13 @@ object PaletteRegistry {
             sbChatCommand = 0x07,
             sbKeepAlive = 0x1B,
             sbChatSessionUpdate = 0x09,
+            sbAcknowledgeConfiguration = 0x0F,
             cbDisconnect = 0x1C,
             cbKeepAlive = 0x26,
             cbSystemChat = 0x72,
             cbPlayerChat = 0x3A,
             cbJoinGame = 0x2B,
+            cbStartConfiguration = 0x6F,
         )
         // 770：1.21.5（MCC Palette1215）
         protocol >= 770 -> PlayChatIds(
@@ -202,11 +214,13 @@ object PaletteRegistry {
             sbChatCommand = 0x06,
             sbKeepAlive = 0x1A,
             sbChatSessionUpdate = 0x08,
+            sbAcknowledgeConfiguration = 0x0E,
             cbDisconnect = 0x1C,
             cbKeepAlive = 0x26,
             cbSystemChat = 0x72,
             cbPlayerChat = 0x3A,
             cbJoinGame = 0x2B,
+            cbStartConfiguration = 0x6F,
         )
         // 768–769：1.21.2 / 1.21.3 / 1.21.4（MCC Palette1212 与 Palette1214，聊天链路 id 一致）
         protocol >= 768 -> PlayChatIds(
@@ -214,11 +228,13 @@ object PaletteRegistry {
             sbChatCommand = 0x06,
             sbKeepAlive = 0x1A,
             sbChatSessionUpdate = 0x08,
+            sbAcknowledgeConfiguration = 0x0E,
             cbDisconnect = 0x1D,
             cbKeepAlive = 0x27,
             cbSystemChat = 0x73,
             cbPlayerChat = 0x3B,
             cbJoinGame = 0x2C,
+            cbStartConfiguration = 0x70,
         )
         // 767：1.21 / 1.21.1（MCC Palette121）。
         // 注意：764–766（1.20.2/1.20.3/1.20.5/1.20.6，MCC Palette1202/1204/1206）也会落到此分支，
@@ -228,11 +244,13 @@ object PaletteRegistry {
             sbChatCommand = 0x05,
             sbKeepAlive = 0x18,
             sbChatSessionUpdate = 0x07,
+            sbAcknowledgeConfiguration = 0x0C,
             cbDisconnect = 0x1D,
             cbKeepAlive = 0x26,
             cbSystemChat = 0x6C,
             cbPlayerChat = 0x39,
             cbJoinGame = 0x2B,
+            cbStartConfiguration = 0x69,
         )
     }
 

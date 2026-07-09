@@ -57,6 +57,7 @@ class ConnectionService : Service() {
         when (intent?.action) {
             ACTION_START -> {
                 val host = intent.getStringExtra(EXTRA_HOST).orEmpty()
+                val serverId = intent.getStringExtra(EXTRA_SERVER_ID)
                 val port = intent.getIntExtra(EXTRA_PORT, 25565)
                 val verId = intent.getStringExtra(EXTRA_VERSION_ID).orEmpty()
                 val proto = intent.getIntExtra(EXTRA_VERSION_PROTO, -1)
@@ -67,7 +68,7 @@ class ConnectionService : Service() {
                 )
                 val mode = if (intent.getBooleanExtra(EXTRA_SIGNING, false))
                     ChatSigningMode.SIGNED else ChatSigningMode.UNSIGNED
-                AppContainer.session.start(ServerAddress(host, port), version, mode)
+                AppContainer.session.start(serverId, ServerAddress(host, port), version, mode)
             }
             ACTION_STOP -> {
                 AppContainer.session.stop()
@@ -162,6 +163,7 @@ class ConnectionService : Service() {
         const val ACTION_START = "com.bilicraft.handheld.START"
         const val ACTION_STOP = "com.bilicraft.handheld.STOP"
         const val EXTRA_HOST = "host"
+        const val EXTRA_SERVER_ID = "server_id"
         const val EXTRA_PORT = "port"
         const val EXTRA_VERSION_ID = "version_id"
         const val EXTRA_VERSION_PROTO = "version_proto"
@@ -173,10 +175,15 @@ class ConnectionService : Service() {
 
         /** 构造启动 Intent（UI 侧调用） */
         fun startIntent(
-            context: Context, host: String, port: Int, version: McVersion,
+            context: Context,
+            serverId: String?,
+            host: String,
+            port: Int,
+            version: McVersion,
             mode: com.bilicraft.handheld.protocol.ChatSigningMode
         ): Intent = Intent(context, ConnectionService::class.java).apply {
             action = ACTION_START
+            putExtra(EXTRA_SERVER_ID, serverId)
             putExtra(EXTRA_HOST, host)
             putExtra(EXTRA_PORT, port)
             putExtra(EXTRA_VERSION_ID, version.id)

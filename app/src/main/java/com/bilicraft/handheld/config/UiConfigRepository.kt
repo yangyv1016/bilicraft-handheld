@@ -28,7 +28,7 @@ data class ServerConfig(
     fun toMcVersion(): McVersion = McVersion(
         id = versionId,
         type = VersionType.RELEASE,
-        protocolNumber = protocolNumber ?: ProtocolTable.byId[versionId]
+        protocolNumber = ProtocolTable.byId[versionId] ?: protocolNumber
     )
 }
 
@@ -38,6 +38,11 @@ data class QuickToolLink(
     val title: String,
     val url: String,
     val description: String = ""
+)
+
+@Serializable
+data class UiPreferences(
+    val chatAutoScroll: Boolean = true
 )
 
 /**
@@ -51,6 +56,7 @@ class UiConfigRepository(context: Context) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
     private val serverFile = File(context.filesDir, "ui_servers.json")
     private val toolsFile = File(context.filesDir, "ui_tools.json")
+    private val preferencesFile = File(context.filesDir, "ui_preferences.json")
     private val officialSigningMigrationFile = File(context.filesDir, "ui_official_server_signing_v1.migrated")
 
     private val _servers = MutableStateFlow<List<ServerConfig>>(emptyList())
@@ -59,19 +65,34 @@ class UiConfigRepository(context: Context) {
     private val _tools = MutableStateFlow<List<QuickToolLink>>(emptyList())
     val tools: StateFlow<List<QuickToolLink>> = _tools.asStateFlow()
 
+    private val _preferences = MutableStateFlow(UiPreferences())
+    val preferences: StateFlow<UiPreferences> = _preferences.asStateFlow()
+
     suspend fun load() = withContext(Dispatchers.IO) {
         _servers.value = migrateOfficialServerSigning(
             loadList(serverFile) ?: defaultServers().also { saveList(serverFile, it) }
-        )
+        ).let { servers ->
+            servers.map(::normalizeServerProtocol).also { normalized ->
+                if (normalized != servers) saveList(serverFile, normalized)
+            }
+        }
         _tools.value = loadList(toolsFile) ?: defaultTools().also { saveList(toolsFile, it) }
+        _preferences.value = loadValue(preferencesFile) ?: UiPreferences().also { saveValue(preferencesFile, it) }
+    }
+
+    suspend fun setChatAutoScroll(enabled: Boolean) = withContext(Dispatchers.IO) {
+        val next = _preferences.value.copy(chatAutoScroll = enabled)
+        _preferences.value = next
+        saveValue(preferencesFile, next)
     }
 
     suspend fun upsertServer(config: ServerConfig) = withContext(Dispatchers.IO) {
+        val normalizedConfig = normalizeServerProtocol(config)
         val current = _servers.value
-        val next = if (current.any { it.id == config.id }) {
-            current.map { if (it.id == config.id) config else it }
+        val next = if (current.any { it.id == normalizedConfig.id }) {
+            current.map { if (it.id == normalizedConfig.id) normalizedConfig else it }
         } else {
-            current + config
+            current + normalizedConfig
         }
         _servers.value = next
         saveList(serverFile, next)
@@ -109,6 +130,10 @@ class UiConfigRepository(context: Context) {
         saveList(toolsFile, current)
     }
 
+    private fun normalizeServerProtocol(config: ServerConfig): ServerConfig = config.copy(
+        protocolNumber = ProtocolTable.byId[config.versionId] ?: config.protocolNumber
+    )
+
     fun newServer(
         name: String,
         host: String,
@@ -137,7 +162,16 @@ class UiConfigRepository(context: Context) {
             if (!file.exists()) null else json.decodeFromString<List<T>>(file.readText())
         }.getOrNull()
 
+    private inline fun <reified T> loadValue(file: File): T? =
+        runCatching {
+            if (!file.exists()) null else json.decodeFromString<T>(file.readText())
+        }.getOrNull()
+
     private inline fun <reified T> saveList(file: File, value: List<T>) {
+        file.writeText(json.encodeToString(value))
+    }
+
+    private inline fun <reified T> saveValue(file: File, value: T) {
         file.writeText(json.encodeToString(value))
     }
 

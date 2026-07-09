@@ -26,13 +26,22 @@ jobs:
       - name: Generate Gradle wrapper
         run: gradle wrapper --gradle-version 8.9
 
-      - name: Build release APK (unsigned)
+      # 从 Secrets 解码 base64 keystore 到工作区文件，供 gradle 签名读取。
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+
+      - name: Build signed release APK
+        env:
+          KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew assembleRelease --stacktrace
 
-      # 未配置签名密钥，产物为 unsigned APK；
-      # 需要正式签名时在仓库 Secrets 配置 keystore 并加签名步骤。
       - name: Publish to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/outputs/apk/release/app-release-unsigned.apk
+          files: app/build/outputs/apk/release/app-release.apk
           generate_release_notes: true

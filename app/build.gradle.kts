@@ -25,6 +25,20 @@ android {
         )
     }
 
+    // 签名密钥从环境变量读取（CI 由 GitHub Secrets 注入）。
+    // 本地未设置这些变量时，release 保持未签名，不影响本地开发编译。
+    val keystorePath = System.getenv("KEYSTORE_FILE")
+    signingConfigs {
+        create("release") {
+            if (keystorePath != null) {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -32,6 +46,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // 仅当注入了 keystore 才应用签名，否则退回未签名产物。
+            signingConfig = if (keystorePath != null)
+                signingConfigs.getByName("release") else null
         }
     }
 

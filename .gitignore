@@ -9,6 +9,11 @@ build/
 local.properties
 .cxx/
 
+# 签名密钥：绝不提交进仓库
+*.keystore
+*.jks
+keystore.b64.txt
+
 # IDE
 .idea/
 *.iml

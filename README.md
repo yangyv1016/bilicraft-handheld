@@ -110,6 +110,17 @@ function onUnload() {}
 
 ---
 
+## 持续集成（CI）
+
+`.github/workflows/` 下有两条 GitHub Actions 流水线：
+
+- **ci.yml**：`push` / PR 到 main/master 触发。装 JDK 17 → 用官方 gradle 生成 wrapper → `assembleDebug` → 上传 `app-debug` APK 为构建产物。
+- **release.yml**：推送 `v*` tag 触发。构建 `assembleRelease`（未签名）→ 自动挂到 GitHub Release。
+
+> 因为本仓库未提交 Gradle wrapper 的二进制 jar，两条流水线都先用 `gradle wrapper` 生成它再构建。若你在本地补交了 wrapper jar，可删掉「Generate Gradle wrapper」步骤直接用 `./gradlew`。release 产物为未签名 APK，需要正式签名时在仓库 Secrets 配置 keystore 并补充签名步骤。
+
+---
+
 ## 已知限制
 
 - **协议覆盖**：按「聊天核心优先」策略，近代版本（1.20.2–1.21.x 现代档案 / 1.13–1.20.1 传统档案）聊天收发经过重点设计；不同小版本的 play 阶段聊天包 id 用集合宽松匹配。远古版本（1.7–1.12）已在协议表登记协议号，但包 id 档案尚未逐一适配，建议配合「自动识别」使用。

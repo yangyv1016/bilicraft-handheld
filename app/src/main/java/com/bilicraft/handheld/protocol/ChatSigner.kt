@@ -1,5 +1,7 @@
 package com.bilicraft.handheld.protocol
 
+import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
 import java.security.PrivateKey
 import java.security.Signature
 import java.util.UUID
@@ -13,60 +15,72 @@ import java.util.UUID
 enum class ChatSigningMode { UNSIGNED, SIGNED }
 
 /**
- * 聊天消息签名器（1.19+）。
+ * session 签名链状态（1.19.3/协议761+）。
  *
- * MC 的签名算法（1.19 / 1.19.1）：对一段确定性拼装的字节做 SHA256withRSA。
- * 签名内容随版本演进：
- *   1.19    (759)：签名覆盖 [salt, uuid, timestamp, 消息内容]
- *   1.19.1+ (760)：引入 lastSeen 消息链，签名还需覆盖已见消息更新
+ * session 体系与旧的 1.19/1.19.1 逐条独立签名不同：客户端进服时生成一个 sessionId，
+ * 之后每条消息带一个自增 index，签名覆盖 (sessionId, index, body)，形成一条链。
+ * 服务器据此防重放、防乱序。
  *
- * 本签名器实现 1.19/1.19.1 的基础签名路径；lastSeen 采用空链（不追踪历史消息），
- * 适配刚进服、无消息上下文的发送场景。详见 README「已知限制」。
+ * 这里维护最小状态：sessionId（进服随机生成一次）+ 单调自增的 messageIndex。
+ * lastSeen 消息链采用空链（进服无历史上下文），故不追踪已见消息摘要。
+ */
+class MessageChainState {
+    val sessionId: UUID = UUID.randomUUID()
+    private var messageIndex: Int = 0
+
+    /** 取下一条消息的序号（从 0 开始，发送后自增） */
+    fun nextIndex(): Int = messageIndex++
+}
+
+/**
+ * 聊天消息签名器（session 体系，1.19.3+）。
  *
- * 私钥来自 PlayerCertificate，只在本对象内存生命周期使用。
+ * 签名算法：SHA256withRSA，对一段确定性拼装的字节签名。
+ * 待签字节布局（session 体系）：
+ *   int(1)                 签名版本前缀
+ *   UUID sender            玩家 uuid
+ *   UUID session           进服生成的 sessionId
+ *   int index              消息序号
+ *   long salt
+ *   long timestampSeconds
+ *   int msgLen | msgBytes  UTF-8 消息内容
+ *   int lastSeenCount(0)   空 lastSeen 链
+ *
+ * 【需校准】此布局的字节序、字段顺序对签名有效性极敏感，必须对真实
+ * enforce-secure-profile 服务器抓包核对。私钥仅在本对象内存生命周期使用。
  */
 class ChatSigner(
     private val privateKey: PrivateKey,
     private val playerUuid: UUID,
-    private val protocolNumber: Int
+    private val sessionId: UUID
 ) {
-    /** 一条已签名消息的全部字段，供 MinecraftClient 写入包体 */
+    /** 一条已签名消息的签名字节（256 字节定长 RSA 签名） */
     data class SignedMessage(
         val message: String,
         val timestamp: Long,
         val salt: Long,
+        val index: Int,
         val signature: ByteArray
     )
 
-    /**
-     * 对消息签名。
-     * 说明：不同小版本的「待签字节」布局有差异，这里实现 1.19.1(760) 的常见布局：
-     *   signable = [1 (版本前缀)] + [senderUuid] + [sessionUuid=0] + ...（见下）
-     * 为保持可读与可维护，采用官方公开的字段顺序拼装。
-     */
-    fun sign(message: String, timestamp: Long, salt: Long): SignedMessage {
+    fun sign(message: String, timestamp: Long, salt: Long, index: Int): SignedMessage {
         val signature = Signature.getInstance("SHA256withRSA").run {
             initSign(privateKey)
-            update(buildSignable(message, timestamp, salt))
+            update(buildSignable(message, timestamp, salt, index))
             sign()
         }
-        return SignedMessage(message, timestamp, salt, signature)
+        return SignedMessage(message, timestamp, salt, index, signature)
     }
 
-    /**
-     * 拼装待签名字节。
-     * 1.19.1+ 布局（简化空 lastSeen）：
-     *   int(1) | UUID sender | UUID session(全0) | long index(0)
-     *   | long salt | long timestampSeconds | int msgLen | msgBytes | int lastSeenCount(0)
-     */
-    private fun buildSignable(message: String, timestamp: Long, salt: Long): ByteArray {
-        val out = java.io.ByteArrayOutputStream()
-        val d = java.io.DataOutputStream(out)
+    private fun buildSignable(message: String, timestamp: Long, salt: Long, index: Int): ByteArray {
+        val out = ByteArrayOutputStream()
+        val d = DataOutputStream(out)
         d.writeInt(1)                                   // 签名版本前缀
         d.writeLong(playerUuid.mostSignificantBits)
         d.writeLong(playerUuid.leastSignificantBits)
-        d.writeLong(0L); d.writeLong(0L)                // sessionId（进服前用全 0）
-        d.writeLong(0L)                                 // message index
+        d.writeLong(sessionId.mostSignificantBits)
+        d.writeLong(sessionId.leastSignificantBits)
+        d.writeInt(index)                               // 消息序号（session 链）
         d.writeLong(salt)
         d.writeLong(timestamp / 1000L)                  // 秒
         val msgBytes = message.toByteArray(Charsets.UTF_8)

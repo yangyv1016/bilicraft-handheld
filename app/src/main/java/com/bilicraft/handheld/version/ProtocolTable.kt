@@ -14,7 +14,12 @@ object ProtocolTable {
 
     /** id → protocol number。id 用该协议号的代表版本。 */
     val entries: List<McVersion> = listOf(
+        // ---- 26.x（Mojang 2026 起改用「年.次」版本号方案）----
+        rel("26.2", 776),
+        rel("26.1", 775),
         // ---- 1.21.x ----
+        rel("1.21.11", 774),
+        rel("1.21.9", 773),
         rel("1.21.8", 772),
         rel("1.21.6", 771),
         rel("1.21.5", 770),

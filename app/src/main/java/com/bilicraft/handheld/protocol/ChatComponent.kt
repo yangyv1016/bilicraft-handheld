@@ -46,4 +46,26 @@ object ChatComponent {
     /** 剥离 §x 传统颜色/格式代码 */
     private fun stripLegacyCodes(s: String): String =
         s.replace(Regex("\u00A7[0-9a-fk-or]", RegexOption.IGNORE_CASE), "")
+
+    /**
+     * NBT 文本组件（1.20.3/协议765+）→ 纯文本。
+     *
+     * 与 JSON 路径同构，只是数据源换成 NbtTag 树：
+     *   - 纯文本组件是一个 String tag；
+     *   - 复合组件是 Compound tag，字段 text / translate / with / extra 与 JSON 同名。
+     * 递归提取所有 text 段拼接，剥离颜色代码。
+     */
+    fun fromNbt(tag: NbtTag): String = stripLegacyCodes(extractNbt(tag))
+
+    private fun extractNbt(tag: NbtTag): String = when (tag) {
+        is NbtTag.NbtString -> tag.value
+        is NbtTag.NbtList -> buildString { tag.items.forEach { append(extractNbt(it)) } }
+        is NbtTag.NbtCompound -> buildString {
+            (tag.entries["text"] as? NbtTag.NbtString)?.let { append(it.value) }
+            (tag.entries["translate"] as? NbtTag.NbtString)?.let { append(it.value) }
+            tag.entries["with"]?.let { append(' ').append(extractNbt(it)) }
+            tag.entries["extra"]?.let { append(extractNbt(it)) }
+        }
+        else -> ""
+    }
 }

@@ -14,9 +14,11 @@ import com.bilicraft.handheld.protocol.McTypes.readString
 import com.bilicraft.handheld.protocol.McTypes.readVarInt
 import com.bilicraft.handheld.protocol.McTypes.uuidFromUndashed
 import com.bilicraft.handheld.protocol.McTypes.writeByteArray
+import com.bilicraft.handheld.protocol.McTypes.writeFixedBitSet
 import com.bilicraft.handheld.protocol.McTypes.writeString
 import com.bilicraft.handheld.protocol.McTypes.writeUuid
 import com.bilicraft.handheld.protocol.McTypes.writeVarInt
+import com.bilicraft.handheld.protocol.Nbt.readNetworkNbt
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -44,7 +46,7 @@ import javax.crypto.Cipher
  * 原始 packet、加密、包 id 全部封死在内部。
  */
 class MinecraftClient(
-    private val profile: PacketProfile,
+    private val palette: PacketPalette,
     private val protocolNumber: Int,
     private val accessToken: String,
     private val playerName: String,
@@ -52,13 +54,17 @@ class MinecraftClient(
     private val signingMode: ChatSigningMode = ChatSigningMode.UNSIGNED,
     private val certificate: com.bilicraft.handheld.auth.PlayerCertificate? = null
 ) {
-    // 强制签名模式且证书就绪时构造签名器；否则为 null（走未签名路径）
+    // session 签名链状态（1.19.3+）：消息序号 + 会话 id。仅签名模式下有意义。
+    private val messageChain = MessageChainState()
+
+    // 强制签名模式且证书就绪时构造签名器；否则为 null（走未签名路径）。
+    // 仅支持 session 体系（1.19.3/761+）；更低版本不构造签名器，回退未签名。
     private val signer: ChatSigner? =
-        if (signingMode == ChatSigningMode.SIGNED && certificate != null && protocolNumber >= 759)
+        if (signingMode == ChatSigningMode.SIGNED && certificate != null && palette.sessionSigning)
             ChatSigner(
                 privateKey = certificate.privateKey,
                 playerUuid = uuidFromUndashed(playerUuid),
-                protocolNumber = protocolNumber
+                sessionId = messageChain.sessionId
             )
         else null
 
@@ -105,50 +111,42 @@ class MinecraftClient(
         _state.value = ConnectionState.Disconnected
     }
 
-    /** 发送聊天消息（play 阶段有效） */
+    /**
+     * 发送聊天消息（play 阶段有效）。
+     *
+     * Chat Message 包结构（1.19.3+ session 体系）：
+     *   String message | Long timestamp | Long salt
+     *   | Prefixed Optional<byte[256]> signature   （签名模式才有）
+     *   | VarInt messageCount | Fixed BitSet(20) acknowledged
+     * 未签名时 signature 存在标志位为 false，其余字段照写。
+     */
     fun sendChat(text: String) {
         val ch = channel ?: return
         if (phase != Phase.PLAY) return
+        val sbChat = palette.sbId(PacketKey.SB_CHAT_MESSAGE) ?: return
         val buf = ch.alloc().buffer()
-        buf.writeVarInt(profile.sbChatMessage)
+        buf.writeVarInt(sbChat)
         buf.writeString(text)
-        // 1.19+ 需要时间戳/盐/签名字段。按签名模式二选一：
-        // - signer != null（强制签名）→ 真实私钥签名
-        // - 否则 → 未签名结构（兼容离线服）
-        if (protocolNumber >= 759) {
-            val signed = signer?.sign(text, System.currentTimeMillis(), McCrypto.random.nextLong())
-            if (signed != null) writeSignedChatTail(buf, signed)
-            else writeUnsignedChatTail(buf)
+
+        val timestamp = System.currentTimeMillis()
+        val salt = McCrypto.random.nextLong()
+        buf.writeLong(timestamp)
+        buf.writeLong(salt)
+
+        // signature：session 签名器就绪则签，否则写"无签名"标志
+        val signed = signer?.sign(text, timestamp, salt, messageChain.nextIndex())
+        if (signed != null) {
+            buf.writeBoolean(true)
+            buf.writeBytes(signed.signature)         // 定长 256 字节，无 VarInt 前缀
+        } else {
+            buf.writeBoolean(false)
         }
+
+        // lastSeen 确认：进服无历史消息，count=0 + 全零 20-bit BitSet
+        buf.writeVarInt(0)
+        buf.writeFixedBitSet(BooleanArray(ACKNOWLEDGED_BITS), ACKNOWLEDGED_BITS)
+
         ch.writeAndFlush(buf)
-    }
-
-    private fun writeUnsignedChatTail(buf: ByteBuf) {
-        buf.writeLong(System.currentTimeMillis())   // timestamp
-        buf.writeLong(0L)                            // salt
-        buf.writeBoolean(false)                      // 无签名
-        if (protocolNumber >= 760) {                 // 1.19.1+
-            buf.writeVarInt(0)                       // 已确认消息数
-            buf.writeBoolean(false)                  // 无 lastSeen 更新（简化）
-        }
-    }
-
-    /** 写入已签名聊天尾部：timestamp/salt/签名字节 + 空 lastSeen 链 */
-    private fun writeSignedChatTail(buf: ByteBuf, signed: ChatSigner.SignedMessage) {
-        buf.writeLong(signed.timestamp)
-        buf.writeLong(signed.salt)
-        buf.writeBoolean(true)                       // 有签名
-        buf.writeByteArrayRaw(signed.signature)      // 签名字节（定长，无 VarInt 前缀差异见下）
-        if (protocolNumber >= 760) {                 // 1.19.1+
-            buf.writeVarInt(0)                       // 已确认消息数
-            buf.writeBoolean(false)                  // 无 lastSeen 更新
-        }
-    }
-
-    /** 写入签名字节。1.19 用固定长度块，这里按 VarInt 长度前缀 + 内容通用写法 */
-    private fun ByteBuf.writeByteArrayRaw(bytes: ByteArray) {
-        writeVarInt(bytes.size)
-        writeBytes(bytes)
     }
 
     // ---- 核心 packet 处理器 ----
@@ -173,7 +171,7 @@ class MinecraftClient(
 
             // Login Start
             val ls = ctx.alloc().buffer()
-            ls.writeVarInt(profile.sbLoginStart)
+            ls.writeVarInt(palette.sbId(PacketKey.SB_LOGIN_START) ?: 0x00)
             ls.writeString(playerName)
             if (protocolNumber >= 761) {                 // 1.19.3+ 附带 UUID
                 ls.writeUuid(uuidFromUndashed(playerUuid))
@@ -201,67 +199,102 @@ class MinecraftClient(
         }
 
         private fun handleLogin(ctx: ChannelHandlerContext, packetId: Int, buf: ByteBuf) {
-            when (packetId) {
-                profile.cbSetCompression -> {
+            when (palette.cbKey(packetId)) {
+                PacketKey.CB_SET_COMPRESSION -> {
                     val threshold = buf.readVarInt()
                     installCompression(ctx, threshold)
                 }
-                profile.cbEncryptionRequest -> doEncryption(ctx, buf)
-                profile.cbLoginSuccess -> onLoginSuccess(ctx)
-                0x00 -> {  // login disconnect
-                    failWithServerReason(ctx, buf, "被服务器拒绝")
-                }
+                PacketKey.CB_ENCRYPTION_REQUEST -> doEncryption(ctx, buf)
+                PacketKey.CB_LOGIN_SUCCESS -> onLoginSuccess(ctx)
+                PacketKey.CB_LOGIN_DISCONNECT -> failWithServerReason(ctx, buf, "被服务器拒绝")
+                else -> Unit
             }
         }
 
         private fun onLoginSuccess(ctx: ChannelHandlerContext) {
-            if (profile.hasConfigurationPhase) {
+            if (palette.hasConfigPhase) {
                 // 现代：发送 Login Acknowledged，进入 configuration
                 phase = Phase.CONFIGURATION
-                profile.sbLoginAck?.let {
+                palette.sbId(PacketKey.SB_LOGIN_ACK)?.let {
                     val ack = ctx.alloc().buffer().writeVarInt(it)
                     ctx.writeAndFlush(ack)
                 }
             } else {
-                phase = Phase.PLAY
-                _state.value = ConnectionState.Connected(serverBrand = null)
+                enterPlay(ctx)
             }
         }
 
         private fun handleConfiguration(ctx: ChannelHandlerContext, packetId: Int, buf: ByteBuf) {
-            when {
-                packetId == profile.cbConfigDisconnect -> failWithServerReason(ctx, buf, "配置阶段被服务器断开")
-                packetId == profile.cbConfigKeepAlive -> {
+            when (palette.cbKey(packetId)) {
+                PacketKey.CB_CONFIG_DISCONNECT -> failWithServerReason(ctx, buf, "配置阶段被服务器断开")
+                PacketKey.CB_CONFIG_KEEP_ALIVE -> {
                     // 回 keepalive（config 阶段），id 与收到的一致
                     val id = buf.readLong()
                     val ka = ctx.alloc().buffer().writeVarInt(packetId)
                     ka.writeLong(id)
                     ctx.writeAndFlush(ka)
                 }
-                packetId == profile.cbConfigFinish -> {
+                PacketKey.CB_CONFIG_KNOWN_PACKS -> {
+                    // 1.20.5+/766+：服务器询问客户端已知数据包。
+                    // 聊天客户端无本地资源包，回一个空表（VarInt 0）即可推进 config。
+                    palette.sbId(PacketKey.SB_CONFIG_KNOWN_PACKS)?.let {
+                        val reply = ctx.alloc().buffer().writeVarInt(it)
+                        reply.writeVarInt(0)
+                        ctx.writeAndFlush(reply)
+                    }
+                }
+                PacketKey.CB_CONFIG_FINISH -> {
                     // 确认 config 结束，进入 play
-                    profile.sbConfigFinishAck?.let {
+                    palette.sbId(PacketKey.SB_CONFIG_FINISH_ACK)?.let {
                         val fin = ctx.alloc().buffer().writeVarInt(it)
                         ctx.writeAndFlush(fin)
                     }
-                    phase = Phase.PLAY
-                    _state.value = ConnectionState.Connected(serverBrand = null)
+                    enterPlay(ctx)
                 }
                 // 其余 config 包（registry data 等）忽略：聊天客户端不需要世界数据
+                else -> Unit
             }
         }
 
+        /** 进入 PLAY：session 签名模式先上报玩家公钥，再置为已连接 */
+        private fun enterPlay(ctx: ChannelHandlerContext) {
+            phase = Phase.PLAY
+            sendChatSessionUpdateIfNeeded(ctx)
+            _state.value = ConnectionState.Connected(serverBrand = null)
+        }
+
         private fun handlePlay(ctx: ChannelHandlerContext, packetId: Int, buf: ByteBuf) {
-            when (packetId) {
-                profile.cbPlayDisconnect -> failWithServerReason(ctx, buf, "被服务器断开")
-                profile.cbKeepAlivePlay -> {
+            when (palette.cbKey(packetId)) {
+                PacketKey.CB_PLAY_DISCONNECT -> failWithServerReason(ctx, buf, "被服务器断开")
+                PacketKey.CB_KEEP_ALIVE_PLAY -> {
                     val id = buf.readLong()
-                    val ka = ctx.alloc().buffer().writeVarInt(profile.sbKeepAlivePlay)
+                    val sbKa = palette.sbId(PacketKey.SB_KEEP_ALIVE_PLAY) ?: return
+                    val ka = ctx.alloc().buffer().writeVarInt(sbKa)
                     ka.writeLong(id)
                     ctx.writeAndFlush(ka)
                 }
-                in profile.cbChatCandidates -> emitChat(buf)
+                PacketKey.CB_SYSTEM_CHAT, PacketKey.CB_PLAYER_CHAT -> emitChat(buf)
+                else -> Unit
             }
+        }
+
+        /**
+         * session 签名（1.19.3+）必需：进 PLAY 后立即发送 Chat Session Update，
+         * 上报玩家公钥 + Mojang 签名 + sessionId + 过期时间。不发则强制签名服拒绝后续聊天。
+         *
+         * 包结构：UUID sessionId | Long expiresAt | ByteArray publicKey(DER) | ByteArray keySignature
+         */
+        private fun sendChatSessionUpdateIfNeeded(ctx: ChannelHandlerContext) {
+            val cert = certificate ?: return
+            if (!palette.sessionSigning || signer == null) return
+            val sbId = palette.sbId(PacketKey.SB_CHAT_SESSION_UPDATE) ?: return
+            val buf = ctx.alloc().buffer()
+            buf.writeVarInt(sbId)
+            buf.writeUuid(messageChain.sessionId)
+            buf.writeLong(cert.expiresAtEpochMs)
+            buf.writeByteArray(cert.publicKeyDer)
+            buf.writeByteArray(cert.publicKeySignatureV2)
+            ctx.writeAndFlush(buf)
         }
 
         private fun failWithServerReason(ctx: ChannelHandlerContext, buf: ByteBuf, fallback: String) {
@@ -271,10 +304,28 @@ class MinecraftClient(
             ctx.close()
         }
 
-        /** 把各版本聊天包尽量归一化为 ChatEvent。宽松解析：读首个字符串当作消息组件。 */
+        /**
+         * 归一化聊天/系统消息为 ChatEvent。
+         *
+         * 组件读取按版本二选一：
+         *   - chatComponentIsNbt（1.20.3+）→ 读网络 NBT，交 ChatComponent.fromNbt
+         *   - 否则 → 读 JSON 字符串，交 ChatComponent.toPlainText
+         *
+         * 说明：System Chat 包首字段就是内容组件，可直接读取。Player Chat 包内容前
+         * 还有 sender/index/签名等头部字段，结构复杂；这里聊天核心优先，先按"内容在包首"
+         * 的宽松策略提取（对 System Chat 精确，对 Player Chat 可能失配则跳过），
+         * 避免误解析导致连接崩溃。Player Chat 完整解析留待后续按真实抓包细化。
+         */
         private fun emitChat(buf: ByteBuf) {
-            val raw = runCatching { buf.readString() }.getOrNull() ?: return
-            val plain = ChatComponent.toPlainText(raw)
+            val (plain, raw) = runCatching {
+                if (palette.chatComponentIsNbt) {
+                    val tag = buf.readNetworkNbt()
+                    ChatComponent.fromNbt(tag) to tag.toString()
+                } else {
+                    val json = buf.readString()
+                    ChatComponent.toPlainText(json) to json
+                }
+            }.getOrNull() ?: return
             if (plain.isBlank()) return
             _incoming.tryEmit(ChatEvent(plainText = plain, rawJson = raw))
         }
@@ -297,7 +348,7 @@ class MinecraftClient(
 
             // Encryption Response：RSA 加密的 sharedSecret + verifyToken
             val resp = ctx.alloc().buffer()
-            resp.writeVarInt(profile.sbEncryptionResponse)
+            resp.writeVarInt(palette.sbId(PacketKey.SB_ENCRYPTION_RESPONSE) ?: 0x01)
             resp.writeByteArray(McCrypto.rsaEncrypt(pubKey, secret.encoded))
             resp.writeByteArray(McCrypto.rsaEncrypt(pubKey, verifyToken))
             ctx.writeAndFlush(resp)
@@ -341,5 +392,10 @@ class MinecraftClient(
         return runCatching {
             http.newCall(req).execute().use { it.isSuccessful }
         }.getOrDefault(false)
+    }
+
+    private companion object {
+        // 聊天 acknowledged 字段固定 20 位（1.19.1+），序列化为 3 字节
+        const val ACKNOWLEDGED_BITS = 20
     }
 }

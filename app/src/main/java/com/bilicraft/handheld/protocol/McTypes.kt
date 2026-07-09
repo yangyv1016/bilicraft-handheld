@@ -101,4 +101,37 @@ object McTypes {
         writeBytes(bytes)
         return this
     }
+
+    /**
+     * 定长 BitSet（1.19.1+ 聊天 acknowledged 字段用）。
+     *
+     * 协议约定：固定 bitCount 位的 BitSet 序列化为 ceil(bitCount/8) 个字节，
+     * 位序为「小端字节内低位在前」（bit i 落在 byte i/8 的第 i%8 位）。
+     * 聊天里 acknowledged 是 20 位 → 固定 3 字节。
+     *
+     * 这里只需要「进服无历史消息」的全零场景，写零位即可；
+     * 但仍按通用位打包实现，避免以后追踪 lastSeen 时再改。
+     */
+    fun ByteBuf.writeFixedBitSet(bits: BooleanArray, bitCount: Int): ByteBuf {
+        val byteCount = (bitCount + 7) / 8
+        val out = ByteArray(byteCount)
+        for (i in 0 until bitCount) {
+            if (i < bits.size && bits[i]) {
+                out[i / 8] = (out[i / 8].toInt() or (1 shl (i % 8))).toByte()
+            }
+        }
+        writeBytes(out)
+        return this
+    }
+
+    fun ByteBuf.readFixedBitSet(bitCount: Int): BooleanArray {
+        val byteCount = (bitCount + 7) / 8
+        val raw = ByteArray(byteCount)
+        readBytes(raw)
+        val bits = BooleanArray(bitCount)
+        for (i in 0 until bitCount) {
+            bits[i] = (raw[i / 8].toInt() and (1 shl (i % 8))) != 0
+        }
+        return bits
+    }
 }

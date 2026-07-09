@@ -8,7 +8,7 @@
 
 - **纯本地微软登录**：OAuth 2.0 设备码流程，全程无需输入密码。完整链路 `Microsoft Token → XBL → XSTS → MC Token → 验权`，refresh_token 静默刷新，用户无感知。
 - **Token 安全存储**：使用 Android `EncryptedSharedPreferences`（主密钥存于 Keystore/TEE），AES-256-GCM 加密，**永不明文落盘**。
-- **全量版本下拉框**：内置协议表（1.7.10 → 1.21.x）+ 在线拉取 Mojang manifest 缓存合并，分组展示（最新版 / Release / Snapshot / Old），默认「自动识别」。
+- **全量版本下拉框**：内置协议表（1.7.10 → 26.2）+ 在线拉取 Mojang manifest 缓存合并，分组展示（最新版 / Release / Snapshot / Old），默认「自动识别」。
 - **本地直连 MC Java 服务器**：Netty 手写协议栈（帧长度 / 压缩 / AES-CFB8 加密 / 版本档案），只做聊天收发。
 - **插件系统**：类 MCC ChatBot 的 JS 沙箱（Rhino 引擎），生命周期 `onLoad / onChat / onUnload`，插件只见归一化 `ChatEvent`，崩溃隔离不拖垮主进程，内置 `KeywordReply` 示例。
 - **强制签名可选**：主控页可切换「强制签名」；开启后取 Mojang 玩家证书并对聊天做真实签名，适配强制安全档案的正版服务器；私钥只在内存中使用，不落盘。
@@ -123,10 +123,10 @@ function onUnload() {}
 
 ## 已知限制
 
-- **协议覆盖**：按「聊天核心优先」策略，近代版本（1.20.2–1.21.x 现代档案 / 1.13–1.20.1 传统档案）聊天收发经过重点设计；不同小版本的 play 阶段聊天包 id 用集合宽松匹配。远古版本（1.7–1.12）已在协议表登记协议号，但包 id 档案尚未逐一适配，建议配合「自动识别」使用。
-- **1.19+ 聊天签名**：提供「强制签名」开关（主控页）。关闭时发送未签名结构，兼容离线服；开启时用 Mojang 玩家证书 + 私钥对消息做 SHA256withRSA 签名，面向 `enforce-secure-profile=true` 的正版服务器。签名路径针对 1.19/1.19.1（协议 759/760）实现，lastSeen 采用空链（适配刚进服、无消息上下文场景）；更高版本的签名链细节与不同小版本的待签字节布局可能仍需按真实服务器校准。私钥仅在内存流转、不落盘。
-- **配置阶段包 id**：现代档案的 configuration/play 包 id 以 1.20.2–1.21 主流值为基准，跨小版本可能有偏移，遇到异常可切换到相邻版本或自动识别。
-- **构建验证**：本仓库代码未在缺少 Android SDK 的环境中编译验证，请以 Android Studio 同步结果为准。
+- **协议映射（palette）**：协议差异用 per-version 精确映射（`PacketPalette` + `PaletteRegistry`）收敛，逻辑包 `PacketKey` ↔ 数字 id 双向查表，取代旧的「集合宽松匹配」。login/configuration 阶段包 id 跨 1.20.2–26.x 稳定、可信度高；**play 阶段聊天/系统消息 id 版本敏感**，已按 MCCTeam/Minecraft-Console-Client 的权威逐版本表分段声明（见 `PacketPalette.modernPlayChatIds`），精确覆盖协议 767→776：767(1.21) / 768-769(1.21.2-1.21.4) / 770(1.21.5) / 771-772(1.21.6-1.21.8) / 773-774(1.21.9-1.21.11) / 775-776(26.1-26.2)。老版本（1.13–1.20.1）保留一份 legacy 基线，标注「未逐版校准」，建议配合「自动识别」使用。
+- **聊天组件解析**：1.20.3（协议765）+ 服务器以「网络 NBT」下发文本组件，已用手写最小 NBT reader（`Nbt.kt`）解析；更早版本走 JSON 字符串路径。System Chat 内容在包首，提取精确；**Player Chat 包内容前有 sender/index/签名等复杂头部，当前按宽松策略处理**，失配则跳过而非崩溃，完整解析待后续按真实抓包细化。
+- **1.19.3+ 聊天签名（session 体系）**：提供「强制签名」开关。关闭时发未签名结构，兼容离线服；开启时进 PLAY 后先发 Chat Session Update 上报玩家公钥 + Mojang 签名 + sessionId，之后每条消息带自增 index，用私钥做 SHA256withRSA 签名，`acknowledged` 为固定 20-bit BitSet（3 字节）。**仅支持 session 体系（协议 761/1.19.3 及以上）**；1.19–1.19.2 的旧逐条签名不支持，遇强制签名服会回退未签名。待签字节布局对字节序/字段顺序极敏感，**需对真实 `enforce-secure-profile=true` 服务器校准**（唯一无法纯离线验证的部分）。私钥仅在内存流转、不落盘。
+- **测试与构建验证**：协议原语（NBT reader、Fixed BitSet、palette 双向映射、签名布局）有纯 JVM 单测（`app/src/test`），可离线跑。整包仍未在缺少 Android SDK 的环境编译验证，请以 Android Studio 同步结果为准。
 
 ---
 

@@ -7,7 +7,7 @@ import com.bilicraft.handheld.protocol.ChatEvent
 import com.bilicraft.handheld.protocol.ChatSigningMode
 import com.bilicraft.handheld.protocol.ConnectionState
 import com.bilicraft.handheld.protocol.MinecraftClient
-import com.bilicraft.handheld.protocol.PacketProfile
+import com.bilicraft.handheld.protocol.PaletteRegistry
 import com.bilicraft.handheld.protocol.ServerAddress
 import com.bilicraft.handheld.protocol.ServerPinger
 import com.bilicraft.handheld.version.McVersion
@@ -109,6 +109,7 @@ class SessionController(
         // 解析协议号：自动识别 → ping
         val protocol = resolveProtocol(addr, version)
         if (protocol == null) {
+            appendSystem("连接失败：无法确定协议版本（内置表无「${version.id}」，且自动识别未获取到版本，请改用「自动识别」或选择真实存在的版本）")
             _connState.value = ConnectionState.Failed("无法确定协议版本")
             scheduleReconnect(attempt)
             return
@@ -133,7 +134,7 @@ class SessionController(
         } else null
 
         val mc = MinecraftClient(
-            profile = PacketProfile.forProtocol(protocol),
+            palette = PaletteRegistry.forProtocol(protocol),
             protocolNumber = protocol,
             accessToken = session.mcAccessToken,
             playerName = session.mcUsername,

@@ -40,8 +40,13 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew assembleRelease --stacktrace
 
+      - name: Prepare release APK name
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cp app/build/outputs/apk/release/app-release.apk "app/build/outputs/apk/release/bilicraft handle-${VERSION}.apk"
+
       - name: Publish to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/outputs/apk/release/app-release.apk
+          files: app/build/outputs/apk/release/bilicraft handle-*.apk
           generate_release_notes: true

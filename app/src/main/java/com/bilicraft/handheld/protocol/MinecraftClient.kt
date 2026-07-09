@@ -367,8 +367,23 @@ class MinecraftClient(
         }
 
         override fun channelInactive(ctx: ChannelHandlerContext) {
-            if (_state.value !is ConnectionState.Failed) {
+            if (_state.value is ConnectionState.Failed) return
+            if (phase == Phase.PLAY) {
+                // 已进入游戏后断开 → 正常掉线，交上层重连
                 _state.value = ConnectionState.Disconnected
+            } else {
+                // 还没进 PLAY 就被对端关闭：握手/登录/配置阶段异常。
+                // 服务器往往不发 Disconnect 包直接 close，这里带阶段信息报失败，
+                // 否则上层会无声重连、丢失唯一的诊断线索。
+                val stage = when (phase) {
+                    Phase.HANDSHAKE -> "握手"
+                    Phase.LOGIN -> "登录"
+                    Phase.CONFIGURATION -> "配置"
+                    Phase.PLAY -> "游戏"
+                }
+                _state.value = ConnectionState.Failed(
+                    "连接在「$stage」阶段被服务器关闭（未收到断开原因，协议 $protocolNumber）"
+                )
             }
         }
 

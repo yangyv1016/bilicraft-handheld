@@ -66,6 +66,11 @@ class VersionRepository(context: Context) {
         else -> ProtocolTable.byId[version.id]
     }
 
+    /** UI 设置项使用：只清除版本 manifest 缓存，不影响协议表和连接状态机。 */
+    fun clearCache() {
+        runCatching { if (cacheFile.exists()) cacheFile.delete() }
+    }
+
     // ---- 内部 ----
 
     private fun fetchManifest(): List<McVersion> {

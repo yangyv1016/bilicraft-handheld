@@ -3,6 +3,7 @@ package com.bilicraft.handheld
 import android.content.Context
 import com.bilicraft.handheld.auth.AuthClient
 import com.bilicraft.handheld.auth.AuthManager
+import com.bilicraft.handheld.config.UiConfigRepository
 import com.bilicraft.handheld.session.SessionController
 import com.bilicraft.handheld.storage.SecureStore
 import com.bilicraft.handheld.version.VersionRepository
@@ -24,6 +25,8 @@ object AppContainer {
         private set
     lateinit var versionRepo: VersionRepository
         private set
+    lateinit var uiConfigRepo: UiConfigRepository
+        private set
     lateinit var session: SessionController
         private set
 
@@ -35,6 +38,7 @@ object AppContainer {
             secureStore = SecureStore(app)
             authManager = AuthManager(AuthClient(BuildConfig.MS_CLIENT_ID), secureStore)
             versionRepo = VersionRepository(app)
+            uiConfigRepo = UiConfigRepository(app)
             session = SessionController(authManager, versionRepo)
             initialized = true
         }

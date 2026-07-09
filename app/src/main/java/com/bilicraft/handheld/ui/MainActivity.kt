@@ -8,18 +8,20 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.graphics.Color
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bilicraft.handheld.AppContainer
 
 /**
- * 唯一 Activity。职责：初始化依赖容器、申请通知权限、承载 Compose 导航。
+ * 唯一入口 Activity：初始化依赖容器、申请通知权限、承载 Compose UI。
+ * 纯 UI 美化：这里定义 Material 3 品牌色；业务状态仍来自 AppContainer 中的既有模块。
  */
 class MainActivity : ComponentActivity() {
 
@@ -33,7 +35,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val dark = isSystemInDarkTheme()
-            MaterialTheme(colorScheme = if (dark) darkColorScheme() else lightColorScheme()) {
+            MaterialTheme(colorScheme = if (dark) BilicraftDarkColors else BilicraftLightColors) {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     val vm: MainViewModel = viewModel()
                     AppRoot(vm)
@@ -51,3 +53,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+private val BilicraftLightColors = lightColorScheme(
+    primary = Color(0xFF1B6EF3),
+    secondary = Color(0xFF006B5F),
+    tertiary = Color(0xFF7A5C00),
+    surface = Color(0xFFFFFBFF),
+    surfaceVariant = Color(0xFFE7EFFD)
+)
+
+private val BilicraftDarkColors = darkColorScheme(
+    primary = Color(0xFF9CC2FF),
+    secondary = Color(0xFF72D8C8),
+    tertiary = Color(0xFFE8C45C),
+    surface = Color(0xFF101318),
+    surfaceVariant = Color(0xFF263142)
+)

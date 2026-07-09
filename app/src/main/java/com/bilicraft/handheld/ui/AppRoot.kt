@@ -11,7 +11,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 @Composable
 fun AppRoot(vm: MainViewModel) {
     val loggedIn by vm.loggedIn.collectAsStateWithLifecycle()
-    if (loggedIn) {
+    val loginOverlay by vm.loginOverlay.collectAsStateWithLifecycle()
+    if (loggedIn && !loginOverlay) {
         MainScreen(vm)
     } else {
         LoginScreen(vm)

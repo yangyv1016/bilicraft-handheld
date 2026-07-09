@@ -96,8 +96,8 @@ class SessionController(
     }
 
     fun sendChat(text: String) {
+        // 不做本地回显：服务器会把自己的消息（含命令回执）广播回来，本地再显示会重复。
         client?.sendChat(text)
-        appendSystem("> $text")   // 本地回显发送内容
     }
 
     // ---- 内部编排 ----

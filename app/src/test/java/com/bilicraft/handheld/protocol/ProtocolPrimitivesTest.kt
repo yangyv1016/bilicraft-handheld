@@ -74,7 +74,7 @@ class ProtocolPrimitivesTest {
         assertTrue(palette.chatComponentIsNbt)
         assertTrue(palette.sessionSigning)
         val sysId = requireNotNull(reverseLookup(palette, PacketKey.CB_SYSTEM_CHAT))
-        assertEquals(PacketKey.CB_SYSTEM_CHAT, palette.cbKey(sysId))
+        assertEquals(PacketKey.CB_SYSTEM_CHAT, palette.cbKey(sysId, PacketPhase.PLAY))
     }
 
     @Test
@@ -84,10 +84,10 @@ class ProtocolPrimitivesTest {
         assertEquals(0x08, palette.sbId(PacketKey.SB_CHAT_MESSAGE))
         assertEquals(0x1B, palette.sbId(PacketKey.SB_KEEP_ALIVE_PLAY))
         assertEquals(0x09, palette.sbId(PacketKey.SB_CHAT_SESSION_UPDATE))
-        assertEquals(PacketKey.CB_SYSTEM_CHAT, palette.cbKey(0x77))
-        assertEquals(PacketKey.CB_PLAYER_CHAT, palette.cbKey(0x3F))
-        assertEquals(PacketKey.CB_PLAY_DISCONNECT, palette.cbKey(0x20))
-        assertEquals(PacketKey.CB_KEEP_ALIVE_PLAY, palette.cbKey(0x2B))
+        assertEquals(PacketKey.CB_SYSTEM_CHAT, palette.cbKey(0x77, PacketPhase.PLAY))
+        assertEquals(PacketKey.CB_PLAYER_CHAT, palette.cbKey(0x3F, PacketPhase.PLAY))
+        assertEquals(PacketKey.CB_PLAY_DISCONNECT, palette.cbKey(0x20, PacketPhase.PLAY))
+        assertEquals(PacketKey.CB_KEEP_ALIVE_PLAY, palette.cbKey(0x2B, PacketPhase.PLAY))
     }
 
     @Test
@@ -98,10 +98,10 @@ class ProtocolPrimitivesTest {
             assertEquals(0x09, palette.sbId(PacketKey.SB_CHAT_MESSAGE))
             assertEquals(0x1C, palette.sbId(PacketKey.SB_KEEP_ALIVE_PLAY))
             assertEquals(0x0A, palette.sbId(PacketKey.SB_CHAT_SESSION_UPDATE))
-            assertEquals(PacketKey.CB_SYSTEM_CHAT, palette.cbKey(0x79))
-            assertEquals(PacketKey.CB_PLAYER_CHAT, palette.cbKey(0x41))
-            assertEquals(PacketKey.CB_PLAY_DISCONNECT, palette.cbKey(0x20))
-            assertEquals(PacketKey.CB_KEEP_ALIVE_PLAY, palette.cbKey(0x2C))
+            assertEquals(PacketKey.CB_SYSTEM_CHAT, palette.cbKey(0x79, PacketPhase.PLAY))
+            assertEquals(PacketKey.CB_PLAYER_CHAT, palette.cbKey(0x41, PacketPhase.PLAY))
+            assertEquals(PacketKey.CB_PLAY_DISCONNECT, palette.cbKey(0x20, PacketPhase.PLAY))
+            assertEquals(PacketKey.CB_KEEP_ALIVE_PLAY, palette.cbKey(0x2C, PacketPhase.PLAY))
         }
     }
 
@@ -136,5 +136,5 @@ class ProtocolPrimitivesTest {
 
     /** 通过遍历已知 id 空间反查某 cb 逻辑包的 id（测试辅助，避免暴露内部 map） */
     private fun reverseLookup(palette: PacketPalette, key: PacketKey): Int? =
-        (0..0xFF).firstOrNull { palette.cbKey(it) == key }
+        (0..0xFF).firstOrNull { palette.cbKey(it, key.phase) == key }
 }

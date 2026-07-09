@@ -9,6 +9,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.bilicraft.handheld.AppContainer
 import com.bilicraft.handheld.protocol.ServerAddress
@@ -41,6 +42,7 @@ class ConnectionService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var wakeLock: PowerManager.WakeLock? = null
     private var stateJob: Job? = null
+    private var logJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -48,6 +50,7 @@ class ConnectionService : Service() {
         startForeground(NOTIF_ID, buildNotification("正在启动…"))
         acquireWakeLock()
         observeState()
+        observeLog()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -92,6 +95,26 @@ class ConnectionService : Service() {
         }
     }
 
+    /**
+     * 把 SessionController 的系统消息镜像到 logcat（tag=BilicraftMC）。
+     * 业务核心保持纯 Kotlin 零污染，观测性只在 Android 宿主层挂载。
+     * 只镜像新增的系统提示（sender==null），避免刷屏聊天内容。
+     */
+    private fun observeLog() {
+        logJob?.cancel()
+        logJob = serviceScope.launch {
+            var lastSeenSize = 0
+            AppContainer.session.log.collect { events ->
+                if (events.size > lastSeenSize) {
+                    events.subList(lastSeenSize, events.size)
+                        .filter { it.sender == null }
+                        .forEach { Log.i(LOG_TAG, it.plainText) }
+                }
+                lastSeenSize = events.size
+            }
+        }
+    }
+
     private fun acquireWakeLock() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(
@@ -103,6 +126,7 @@ class ConnectionService : Service() {
     override fun onDestroy() {
         wakeLock?.let { if (it.isHeld) it.release() }
         stateJob?.cancel()
+        logJob?.cancel()
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -145,6 +169,7 @@ class ConnectionService : Service() {
 
         private const val CHANNEL_ID = "connection"
         private const val NOTIF_ID = 1001
+        private const val LOG_TAG = "BilicraftMC"
 
         /** 构造启动 Intent（UI 侧调用） */
         fun startIntent(

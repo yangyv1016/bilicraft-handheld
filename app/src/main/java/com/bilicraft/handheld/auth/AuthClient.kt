@@ -28,9 +28,9 @@ class AuthClient(private val clientId: String) {
         .build()
 
     private val certificateHttp = http.newBuilder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .callTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(CERTIFICATE_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .readTimeout(CERTIFICATE_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .callTimeout(CERTIFICATE_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .build()
 
     /** 结果类型：成功携带值，失败携带原因。避免异常穿透到编排层。 */
@@ -306,6 +306,9 @@ class AuthClient(private val clientId: String) {
             "https://api.minecraftservices.com/minecraft/profile"
         private const val MC_CERTIFICATES_URL =
             "https://api.minecraftservices.com/player/certificates"
+        private const val CERTIFICATE_CONNECT_TIMEOUT_SECONDS = 30L
+        private const val CERTIFICATE_READ_TIMEOUT_SECONDS = 60L
+        private const val CERTIFICATE_CALL_TIMEOUT_SECONDS = 60L
         private val JSON_MEDIA = "application/json".toMediaType()
     }
 }

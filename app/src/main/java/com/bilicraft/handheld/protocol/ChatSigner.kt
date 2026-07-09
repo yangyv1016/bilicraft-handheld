@@ -30,6 +30,16 @@ class MessageChainState {
 
     /** 取下一条消息的序号（从 0 开始，发送后自增） */
     fun nextIndex(): Int = messageIndex++
+
+    /**
+     * 重置消息序号为 0。
+     *
+     * 触发时机：重新进入 PLAY（代理服切换后端子服）后重报 ChatSession。
+     * 对齐 vanilla：setChatSession 会重建 SignedMessageChain.Encoder，index 归零；
+     * sessionId 保持不变（同一 profile 会话，代理转发到各后端，各后端独立从 index 0 验证）。
+     * 不重置会导致切回原后端时 index 不从 0 起 → 后端判定乱序/签名链断裂 → 聊天被禁用。
+     */
+    fun reset() { messageIndex = 0 }
 }
 
 /**

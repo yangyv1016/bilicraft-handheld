@@ -53,7 +53,7 @@ object ChatComponent {
      * 内置翻译模板表（vanilla en_us 子集，只覆盖聊天链路高频 key）。
      *
      * 模板占位符遵循 Java 格式串：%s 顺序取参、%1$s 按索引取参、%% 表示字面 %。
-     * 未登记的 key 走兜底：有 with 参数时拼接参数（牺牲 key 求可读），否则显示 key。
+     * 未登记的 key 不能只拼 with 参数；否则系统消息会退化成“只剩玩家名”。
      */
     private val translationTemplates: Map<String, String> = mapOf(
         "chat.type.text" to "<%s> %s",
@@ -62,6 +62,9 @@ object ChatComponent {
         "chat.type.admin" to "[%s: %s]",
         "commands.message.display.incoming" to "%s 悄悄对你说：%s",
         "commands.message.display.outgoing" to "你悄悄对 %s 说：%s",
+        "commands.say.success" to "[%s] %s",
+        "chat.square_brackets" to "[%s]",
+        "chat.link.confirm" to "你确定要打开以下网站吗？",
         "multiplayer.player.joined" to "%s 加入了游戏",
         "multiplayer.player.joined.renamed" to "%s（曾用名 %s）加入了游戏",
         "multiplayer.player.left" to "%s 离开了游戏",
@@ -77,10 +80,50 @@ object ChatComponent {
         "death.attack.player" to "%s 被 %s 杀死了",
         "death.attack.mob" to "%s 被 %s 杀死了",
         "death.attack.fall" to "%s 落地过猛",
+        "death.attack.fall.player" to "%s 被 %s 推下高处摔死了",
+        "death.attack.fall.accident.generic" to "%s 从高处摔了下来",
+        "death.attack.fall.accident.ladder" to "%s 从梯子上摔了下来",
+        "death.attack.fall.accident.vines" to "%s 从藤蔓上摔了下来",
+        "death.attack.fall.accident.weeping_vines" to "%s 从垂泪藤上摔了下来",
+        "death.attack.fall.accident.twisting_vines" to "%s 从缠怨藤上摔了下来",
+        "death.attack.fall.accident.scaffolding" to "%s 从脚手架上摔了下来",
+        "death.attack.fall.accident.other_climbable" to "%s 摔了下来",
+        "death.fell.accident.generic" to "%s 从高处摔了下来",
+        "death.fell.accident.ladder" to "%s 从梯子上摔了下来",
+        "death.fell.accident.vines" to "%s 从藤蔓上摔了下来",
+        "death.fell.accident.weeping_vines" to "%s 从垂泪藤上摔了下来",
+        "death.fell.accident.twisting_vines" to "%s 从缠怨藤上摔了下来",
+        "death.fell.accident.scaffolding" to "%s 从脚手架上摔了下来",
+        "death.fell.accident.other_climbable" to "%s 摔了下来",
         "death.attack.drown" to "%s 淹死了",
         "death.attack.lava" to "%s 试图在岩浆里游泳",
         "death.attack.inFire" to "%s 葬身火海",
         "death.attack.explosion" to "%s 被炸飞了",
+        "death.attack.explosion.player" to "%s 被 %s 炸死了",
+        "death.attack.fireball" to "%s 被 %s 用火球烧死了",
+        "death.attack.fireworks" to "%s 随着一声巨响消失了",
+        "death.attack.flyIntoWall" to "%s 感受到了动能",
+        "death.attack.generic" to "%s 死了",
+        "death.attack.generic.player" to "%s 在试图逃离 %s 时死了",
+        "death.attack.hotFloor" to "%s 发现了地板是熔岩",
+        "death.attack.inFire.player" to "%s 在与 %s 战斗时走入了火中",
+        "death.attack.inWall" to "%s 在墙里窒息而亡",
+        "death.attack.indirectMagic" to "%s 被 %s 用魔法杀死了",
+        "death.attack.lightningBolt" to "%s 被闪电击中",
+        "death.attack.magic" to "%s 被魔法杀死了",
+        "death.attack.onFire" to "%s 被烧死了",
+        "death.attack.onFire.player" to "%s 在与 %s 战斗时被烤熟了",
+        "death.attack.outOfWorld" to "%s 掉出了这个世界",
+        "death.attack.outsideBorder" to "%s 离开了世界边界",
+        "death.attack.sonic_boom" to "%s 被一道音爆抹除了",
+        "death.attack.starve" to "%s 饿死了",
+        "death.attack.sweetBerryBush" to "%s 被甜浆果丛刺死了",
+        "death.attack.thorns" to "%s 在试图伤害 %s 时被杀",
+        "death.attack.trident" to "%s 被 %s 刺穿了",
+        "death.attack.wither" to "%s 凋零了",
+        "death.fell.finish" to "%s 落地过猛",
+        "death.fell.finish.item" to "%s 落地过猛",
+        "death.fell.killer" to "%s 注定要摔死",
     )
 
     // ==== 对外入口 ====
@@ -116,18 +159,12 @@ object ChatComponent {
         val style = mergeJsonStyle(obj, inherited)
         // text：内嵌 §x 码在当前样式上叠加
         obj.optString("text", "").takeIf { it.isNotEmpty() }?.let { appendLegacy(it, style, out) }
-        // translate：套用模板后作为一段（保留本组件自身颜色；逐参数颜色暂不细分）
+        // translate：套用模板，把 with 参数作为组件片段嵌入，避免系统消息只剩第一个参数。
         obj.optString("translate", "").takeIf { it.isNotEmpty() }?.let { key ->
             val args = obj.optJSONArray("with")?.let { arr ->
-                List(arr.length()) { i ->
-                    when (val item = arr.get(i)) {
-                        is JSONObject -> extractPlain(item)
-                        is JSONArray -> extractPlainArray(item)
-                        else -> item.toString()
-                    }
-                }
+                List(arr.length()) { i -> spansFromJsonValue(arr.get(i), style) }
             } ?: emptyList()
-            appendLegacy(renderTranslation(key, args), style, out)
+            appendTranslation(key, args, style, out)
         }
         obj.optJSONArray("extra")?.let { appendJsonArray(it, style, out) }
     }
@@ -170,8 +207,8 @@ object ChatComponent {
                     ?.takeIf { it.isNotEmpty() }?.let { appendLegacy(it, style, out) }
                 (tag.entries["translate"] as? NbtTag.NbtString)?.let { keyTag ->
                     val args = (tag.entries["with"] as? NbtTag.NbtList)
-                        ?.items?.map { extractPlainNbt(it) } ?: emptyList()
-                    appendLegacy(renderTranslation(keyTag.value, args), style, out)
+                        ?.items?.map { spansFromNbtValue(it, style) } ?: emptyList()
+                    appendTranslation(keyTag.value, args, style, out)
                 }
                 tag.entries["extra"]?.let { appendNbt(it, style, out) }
             }
@@ -234,54 +271,107 @@ object ChatComponent {
         flush()
     }
 
-    // ==== translate 参数扁平化（取纯文本，逐参数颜色暂不保留） ====
+    // ==== translate 参数与模板渲染 ====
 
-    private fun extractPlain(obj: JSONObject): String = toPlainText(obj.toString())
-    private fun extractPlainArray(arr: JSONArray): String = toPlainText(arr.toString())
-    private fun extractPlainNbt(tag: NbtTag): String = fromNbt(tag)
+    private fun spansFromJsonValue(value: Any, inherited: Style): List<ChatSpan> = ArrayList<ChatSpan>().also { out ->
+        when (value) {
+            is JSONObject -> appendJson(value, inherited, out)
+            is JSONArray -> appendJsonArray(value, inherited, out)
+            is String -> appendLegacy(value, inherited, out)
+            else -> appendLegacy(value.toString(), inherited, out)
+        }
+    }
+
+    private fun spansFromNbtValue(tag: NbtTag, inherited: Style): List<ChatSpan> =
+        ArrayList<ChatSpan>().also { appendNbt(tag, inherited, it) }
 
     /**
-     * 翻译组件渲染：查内置模板并填参。
-     * 命中 → 按 %s / %n$s 填参；未命中但有参数 → 拼接参数；未命中且无参 → 原样返回 key。
+     * 翻译组件渲染：查内置模板并填入组件参数。
+     * 命中 → 按 %s / %n$s 插入参数片段；未命中但有参数 → 拼接参数；未命中且无参 → 原样返回 key。
      */
-    private fun renderTranslation(key: String, args: List<String>): String {
-        val template = translationTemplates[key]
-            ?: return if (args.isEmpty()) key else args.joinToString(" ")
-        return applyTemplate(template, args)
+    private fun appendTranslation(
+        key: String,
+        args: List<List<ChatSpan>>,
+        style: Style,
+        out: MutableList<ChatSpan>
+    ) {
+        val template = translationTemplates[key] ?: fallbackTemplate(key, args.size)
+        if (template == null) {
+            appendUnknownTranslation(key, args, style, out)
+            return
+        }
+        applyTemplate(template, args, style, out)
+    }
+
+    private fun fallbackTemplate(key: String, argCount: Int): String? = when {
+        key.startsWith("death.attack.") && key.endsWith(".player") && argCount >= 2 -> "%s 被 %s 杀死了"
+        key.startsWith("death.attack.") && argCount >= 1 -> "%s 死了"
+        key.startsWith("death.fell.") && argCount >= 1 -> "%s 从高处摔了下来"
+        key.startsWith("multiplayer.player.") && argCount >= 1 -> "%s"
+        else -> null
+    }
+
+    private fun appendUnknownTranslation(
+        key: String,
+        args: List<List<ChatSpan>>,
+        style: Style,
+        out: MutableList<ChatSpan>
+    ) {
+        appendLegacy("[$key]", style, out)
+        args.forEach { spans ->
+            appendLegacy(" ", style, out)
+            out.addAll(spans)
+        }
     }
 
     /**
      * 套用 Java 风格格式串：%s 顺序取参、%n$s 索引取参、%% 字面百分号。
      * 越界索引替换为空串，避免抛异常。
      */
-    private fun applyTemplate(template: String, args: List<String>): String = buildString {
+    private fun applyTemplate(
+        template: String,
+        args: List<List<ChatSpan>>,
+        style: Style,
+        out: MutableList<ChatSpan>
+    ) {
         var i = 0
         var autoIndex = 0
+        val literal = StringBuilder()
+        fun flushLiteral() {
+            if (literal.isNotEmpty()) {
+                appendLegacy(literal.toString(), style, out)
+                literal.clear()
+            }
+        }
+        fun appendArg(index: Int) {
+            flushLiteral()
+            out.addAll(args.getOrElse(index) { emptyList() })
+        }
         while (i < template.length) {
             val c = template[i]
             if (c != '%') {
-                append(c); i++; continue
+                literal.append(c); i++; continue
             }
-            if (i + 1 >= template.length) { append('%'); i++; continue }
+            if (i + 1 >= template.length) { literal.append('%'); i++; continue }
             val next = template[i + 1]
             when {
-                next == '%' -> { append('%'); i += 2 }
+                next == '%' -> { literal.append('%'); i += 2 }
                 next == 's' -> {
-                    append(args.getOrElse(autoIndex) { "" }); autoIndex++; i += 2
+                    appendArg(autoIndex); autoIndex++; i += 2
                 }
                 next.isDigit() -> {
                     var j = i + 1
                     while (j < template.length && template[j].isDigit()) j++
                     if (j + 1 < template.length && template[j] == '$' && template[j + 1] == 's') {
-                        val idx = template.substring(i + 1, j).toInt() - 1
-                        append(args.getOrElse(idx) { "" })
+                        appendArg(template.substring(i + 1, j).toInt() - 1)
                         i = j + 2
                     } else {
-                        append(c); i++
+                        literal.append(c); i++
                     }
                 }
-                else -> { append(c); i++ }
+                else -> { literal.append(c); i++ }
             }
         }
+        flushLiteral()
     }
 }

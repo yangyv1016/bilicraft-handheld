@@ -327,7 +327,8 @@ class MinecraftClient(
                     ka.writeLong(id)
                     ctx.writeAndFlush(ka)
                 }
-                PacketKey.CB_SYSTEM_CHAT, PacketKey.CB_PLAYER_CHAT -> emitChat(buf)
+                PacketKey.CB_SYSTEM_CHAT -> emitSystemChat(buf)
+                PacketKey.CB_PLAYER_CHAT -> emitPlayerChat(buf)
                 PacketKey.CB_START_CONFIGURATION -> acknowledgeConfiguration(ctx)
                 else -> Unit
             }
@@ -366,6 +367,10 @@ class MinecraftClient(
             buf.writeByteArray(cert.publicKeyDer)
             buf.writeByteArray(cert.publicKeySignatureV2)
             ctx.writeAndFlush(buf)
+
+            // 重报 session = 新后端签名链起点，index 必须归零（对齐 vanilla 重建 Encoder）。
+            // 否则切回原后端时 index 不从 0 起，后端判定乱序/链断裂 → 聊天被禁用。
+            messageChain.reset()
         }
 
         /**
@@ -389,31 +394,121 @@ class MinecraftClient(
         }
 
         /**
-         * 归一化聊天/系统消息为 ChatEvent。
-         *
-         * 组件读取按版本二选一：
-         *   - chatComponentIsNbt（1.20.3+）→ 读网络 NBT，交 ChatComponent.fromNbt
-         *   - 否则 → 读 JSON 字符串，交 ChatComponent.toPlainText
-         *
-         * 说明：System Chat 包首字段就是内容组件，可直接读取。Player Chat 包内容前
-         * 还有 sender/index/签名等头部字段，结构复杂；这里聊天核心优先，先按"内容在包首"
-         * 的宽松策略提取（对 System Chat 精确，对 Player Chat 可能失配则跳过），
-         * 避免误解析导致连接崩溃。Player Chat 完整解析留待后续按真实抓包细化。
+         * 读取一个文本组件为富文本片段（版本自适应）。
+         *   - chatComponentIsNbt（1.20.3+/765+）→ 网络 NBT 组件
+         *   - 否则 → JSON 字符串组件
+         * 返回 (spans, raw)；raw 用于插件消费原始组件。
          */
-        private fun emitChat(buf: ByteBuf) {
-            val (spans, raw) = runCatching {
-                if (palette.chatComponentIsNbt) {
-                    val tag = buf.readNetworkNbt()
-                    ChatComponent.spansFromNbt(tag) to tag.toString()
-                } else {
-                    val json = buf.readString()
-                    ChatComponent.toSpans(json) to json
-                }
-            }.getOrNull() ?: return
+        private fun readComponent(buf: ByteBuf): Pair<List<ChatSpan>, String> =
+            if (palette.chatComponentIsNbt) {
+                val tag = buf.readNetworkNbt()
+                ChatComponent.spansFromNbt(tag) to tag.toString()
+            } else {
+                val json = buf.readString()
+                ChatComponent.toSpans(json) to json
+            }
+
+        /**
+         * System Chat（服务器广播、命令回显、多数聊天走这里）。
+         * 包结构（1.19.1+ 稳定）：内容组件在包首，其后是 overlay 布尔（是否 actionbar），
+         * 内容即包首字段，直接读取即精确。
+         */
+        private fun emitSystemChat(buf: ByteBuf) {
+            val (spans, raw) = runCatching { readComponent(buf) }.getOrNull() ?: return
             val plain = spans.joinToString("") { it.text }
             if (plain.isBlank()) return
             _incoming.tryEmit(ChatEvent(plainText = plain, rawJson = raw, spans = spans))
         }
+
+        /**
+         * Player Chat（玩家签名聊天，1.19.3+ session 体系）。
+         *
+         * 内容不在包首：前面有一整套签名头部，须逐字段跳过才能取到真正可读的内容与发送者名。
+         * 字段顺序对齐 vanilla ClientboundPlayerChatPacket / MCC：
+         *
+         *   sender: UUID (16B)
+         *   index: VarInt                                    // 消息序号
+         *   signature: 可选 256B                             // present 布尔为 true 时存在
+         *   ── 以上为 SignedMessageHeader/Body 的签名部分 ──
+         *   body.content: String                             // 玩家键入的原始明文（未装饰）
+         *   body.timestamp: Long
+         *   body.salt: Long
+         *   previousMessages: VarInt 计数 + 每条 { id: VarInt; id==0 时附 256B 签名 }
+         *   ── 以上为可验证消息体，UI 不需要，仅跳过 ──
+         *   unsignedContent: 可选组件                        // 服务器改写后的展示内容（present 布尔）
+         *   filterType: VarInt                               // 0=PASS 1=FULLY 2=PARTIALLY(+长整型位组)
+         *   ── 以下为展示装饰，UI 需要 ──
+         *   chatType: VarInt                                 // 注册表引用（holder，服务器恒为引用）
+         *   senderName: 组件                                 // 发送者显示名（带前缀/颜色）
+         *   targetName: 可选组件                             // 私聊等定向目标名
+         *
+         * 展示对齐 vanilla：有 unsignedContent 用它，否则用明文 body.content，
+         * 再套 chat.type.text 装饰「<发送者名> 内容」。装饰模板无法从注册表取，
+         * 但服务器聊天绝大多数即此格式，直接构造等价片段。
+         */
+        private fun emitPlayerChat(buf: ByteBuf) {
+            val parsed = runCatching {
+                buf.skipBytes(16)                                // sender UUID
+                buf.readVarInt()                                 // index
+                if (buf.readBoolean()) buf.skipBytes(256)        // 签名（present 时定长 256B）
+
+                val bodyContent = buf.readString()               // 明文正文
+                buf.readLong()                                   // timestamp
+                buf.readLong()                                   // salt
+                skipPreviousMessages(buf)                        // 历史消息引用列表
+
+                val unsigned = if (buf.readBoolean()) readComponent(buf) else null
+                skipFilterMask(buf)                              // filter type (+partial 位组)
+
+                buf.readVarInt()                                 // chatType holder（引用 id）
+                val (senderSpans, _) = readComponent(buf)        // 发送者显示名
+                if (buf.readBoolean()) readComponent(buf)        // targetName（忽略）
+
+                val (contentSpans, contentRaw) = unsigned
+                    ?: (ChatComponent.toSpans(bodyContent) to bodyContent)
+                Triple(senderSpans, contentSpans, contentRaw)
+            }.getOrNull() ?: return
+
+            val (senderSpans, contentSpans, contentRaw) = parsed
+            val senderName = senderSpans.joinToString("") { it.text }
+            val spans = decorateChat(senderSpans, contentSpans)
+            val plain = spans.joinToString("") { it.text }
+            if (plain.isBlank()) return
+            _incoming.tryEmit(
+                ChatEvent(
+                    plainText = plain,
+                    rawJson = contentRaw,
+                    sender = senderName.ifBlank { null },
+                    spans = spans
+                )
+            )
+        }
+
+        /** previousMessages：VarInt 计数；每项 id VarInt，id==0（新签名）时附带 256B 签名。 */
+        private fun skipPreviousMessages(buf: ByteBuf) {
+            val count = buf.readVarInt()
+            repeat(count) {
+                val id = buf.readVarInt()
+                if (id == 0) buf.skipBytes(256)
+            }
+        }
+
+        /** filter type：0=PASS_THROUGH 1=FULLY_FILTERED 2=PARTIALLY_FILTERED（附 long 数组位组）。 */
+        private fun skipFilterMask(buf: ByteBuf) {
+            if (buf.readVarInt() == 2) {
+                val longs = buf.readVarInt()
+                buf.skipBytes(longs * 8)
+            }
+        }
+
+        /** 「<发送者> 内容」装饰：对齐 vanilla chat.type.text 默认模板，保留双方各自样式。 */
+        private fun decorateChat(sender: List<ChatSpan>, content: List<ChatSpan>): List<ChatSpan> =
+            buildList {
+                add(ChatSpan("<"))
+                addAll(sender)
+                add(ChatSpan("> "))
+                addAll(content)
+            }
 
         private fun doEncryption(ctx: ChannelHandlerContext, buf: ByteBuf) {
             val serverId = buf.readString()

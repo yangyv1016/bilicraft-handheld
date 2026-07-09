@@ -302,6 +302,6 @@ class SessionController(
         const val PLUGINS_ENABLED = false
         const val MAX_RECONNECT = 6
         const val MAX_LOG = 500
-        const val CERTIFICATE_FETCH_TIMEOUT_MS = 15_000L
+        const val CERTIFICATE_FETCH_TIMEOUT_MS = 70_000L
     }
 }

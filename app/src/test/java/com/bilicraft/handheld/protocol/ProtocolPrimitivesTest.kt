@@ -2,6 +2,8 @@ package com.bilicraft.handheld.protocol
 
 import com.bilicraft.handheld.protocol.McTypes.readFixedBitSet
 import com.bilicraft.handheld.protocol.McTypes.writeFixedBitSet
+import com.bilicraft.handheld.protocol.McTypes.writeString
+import com.bilicraft.handheld.protocol.McTypes.writeVarInt
 import com.bilicraft.handheld.protocol.Nbt.readNetworkNbt
 import io.netty.buffer.Unpooled
 import org.junit.Assert.assertEquals
@@ -65,6 +67,36 @@ class ProtocolPrimitivesTest {
         assertEquals("ab", ChatComponent.fromNbt(tag))
     }
 
+    @Test
+    fun `死亡消息中的实体名来自完整翻译表`() {
+        MinecraftTranslations.loadJson("""
+            {
+              "death.attack.explosion.player": "%1${'$'}s被%2${'$'}s炸死了",
+              "death.attack.mob": "%1${'$'}s被%2${'$'}s杀死了",
+              "entity.minecraft.creeper": "苦力怕",
+              "entity.minecraft.zombie": "僵尸"
+            }
+        """.trimIndent())
+
+        val creeperDeathJson = """{"translate":"death.attack.explosion.player","with":[{"text":"xxx"},{"translate":"entity.minecraft.creeper"}]}"""
+        assertEquals("xxx被苦力怕炸死了", ChatComponent.toPlainText(creeperDeathJson))
+
+        val zombieDeathTag = NbtTag.NbtCompound(mapOf(
+            "translate" to NbtTag.NbtString("death.attack.mob"),
+            "with" to NbtTag.NbtList(listOf(
+                NbtTag.NbtCompound(mapOf("text" to NbtTag.NbtString("xxx"))),
+                NbtTag.NbtCompound(mapOf("translate" to NbtTag.NbtString("entity.minecraft.zombie")))
+            ))
+        ))
+        assertEquals("xxx被僵尸杀死了", ChatComponent.fromNbt(zombieDeathTag))
+    }
+
+    @Test
+    fun `未知翻译key优先使用组件fallback`() {
+        val raw = """{"translate":"mod.example.unknown_entity","fallback":"神秘生物","with":[{"text":"ignored"}]}"""
+        assertEquals("神秘生物", ChatComponent.toPlainText(raw))
+    }
+
     // ---- palette：双向映射与版本特性 ----
 
     @Test
@@ -122,6 +154,64 @@ class ProtocolPrimitivesTest {
         assertTrue(!palette.hasConfigPhase)
         assertTrue(!palette.chatComponentIsNbt)
         assertNull(palette.sbId(PacketKey.SB_LOGIN_ACK))
+    }
+
+    // ---- 命令补全：服务器响应解析与输入替换 ----
+
+    @Test
+    fun `命令补全响应解析候选和tooltip`() {
+        val buf = Unpooled.buffer()
+        buf.writeVarInt(7)
+        buf.writeVarInt(1)
+        buf.writeVarInt(2)
+        buf.writeVarInt(2)
+        buf.writeString("gamemode")
+        buf.writeBoolean(false)
+        buf.writeString("give")
+        buf.writeBoolean(true)
+        buf.writeString("{\"text\":\"给予物品\"}")
+
+        val state = CommandSuggestions.readResponse(buf, componentIsNbt = false, requestInput = "/gi")
+
+        assertEquals(7, state.requestId)
+        assertEquals("/gi", state.requestInput)
+        assertEquals(1, state.start)
+        assertEquals(2, state.length)
+        assertEquals("gamemode", state.suggestions[0].text)
+        assertNull(state.suggestions[0].tooltip)
+        assertEquals("give", state.suggestions[1].text)
+        assertEquals("给予物品", state.suggestions[1].tooltip)
+    }
+
+    @Test
+    fun `命令补全按服务器范围替换输入片段`() {
+        assertEquals("/gamemode creative", CommandSuggestions.apply("/game creative", 1, 4, "gamemode"))
+        assertEquals("/tp Steve", CommandSuggestions.apply("/t Steve", 1, 1, "tp"))
+        assertEquals("/help", CommandSuggestions.apply("/he", 1, 2, "help"))
+    }
+
+    @Test
+    fun `1_21命令补全包id对齐MCC权威表`() {
+        val palette = PaletteRegistry.forProtocol(767)
+        assertEquals(0x0B, palette.sbId(PacketKey.SB_COMMAND_SUGGESTION))
+        assertEquals(PacketKey.CB_COMMAND_SUGGESTIONS, palette.cbKey(0x10, PacketPhase.PLAY))
+        assertEquals(PacketKey.CB_DECLARE_COMMANDS, palette.cbKey(0x11, PacketPhase.PLAY))
+    }
+
+    @Test
+    fun `1_21_11命令补全包id对齐MCC权威表`() {
+        val palette = PaletteRegistry.forProtocol(774)
+        assertEquals(0x0E, palette.sbId(PacketKey.SB_COMMAND_SUGGESTION))
+        assertEquals(PacketKey.CB_COMMAND_SUGGESTIONS, palette.cbKey(0x0F, PacketPhase.PLAY))
+        assertEquals(PacketKey.CB_DECLARE_COMMANDS, palette.cbKey(0x10, PacketPhase.PLAY))
+    }
+
+    @Test
+    fun `未精确登记的1_20_x不启用命令补全包`() {
+        val palette = PaletteRegistry.forProtocol(766)
+        assertNull(palette.sbId(PacketKey.SB_COMMAND_SUGGESTION))
+        assertNull(palette.cbKey(0x10, PacketPhase.PLAY))
+        assertNull(palette.cbKey(0x11, PacketPhase.PLAY))
     }
 
     // ---- 辅助 ----

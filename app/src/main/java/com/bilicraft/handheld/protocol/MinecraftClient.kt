@@ -74,6 +74,9 @@ class MinecraftClient(
     private val _incoming = MutableSharedFlow<ChatEvent>(extraBufferCapacity = 256)
     val incoming: SharedFlow<ChatEvent> = _incoming.asSharedFlow()
 
+    private val _commandSuggestions = MutableStateFlow(CommandSuggestions.Empty)
+    val commandSuggestions: StateFlow<CommandSuggestionState> = _commandSuggestions.asStateFlow()
+
     private var channel: Channel? = null
     private var group: EventLoopGroup? = null
     private val http = OkHttpClient()
@@ -84,6 +87,9 @@ class MinecraftClient(
 
     // 会话公钥是否已上报（一次性守卫）：JoinGame 会在重生/换世界时重复到达，只在首个 JoinGame 上报。
     @Volatile private var chatSessionReported = false
+
+    @Volatile private var commandSuggestionRequestId = 0
+    @Volatile private var latestCommandSuggestionInput = ""
 
     fun connect(address: ServerAddress) {
         _state.value = ConnectionState.Connecting
@@ -111,6 +117,9 @@ class MinecraftClient(
         channel?.close()
         group?.shutdownGracefully()
         channel = null
+        commandSuggestionRequestId++
+        latestCommandSuggestionInput = ""
+        _commandSuggestions.value = CommandSuggestions.Empty
         _state.value = ConnectionState.Disconnected
     }
 
@@ -159,6 +168,24 @@ class MinecraftClient(
         // Checksum 字节（1.21.5/协议770+）：0 = 跳过校验。缺此字节会导致服务器解析越界。
         if (palette.chatHasChecksum) buf.writeByte(0)
 
+        ch.writeAndFlush(buf)
+    }
+
+    fun requestCommandSuggestions(input: String) {
+        val ch = channel ?: return
+        if (phase != Phase.PLAY || !input.startsWith("/")) {
+            commandSuggestionRequestId++
+            latestCommandSuggestionInput = ""
+            _commandSuggestions.value = CommandSuggestions.clearFor(input)
+            return
+        }
+        val sbSuggestion = palette.sbId(PacketKey.SB_COMMAND_SUGGESTION) ?: return
+        val requestId = ++commandSuggestionRequestId
+        latestCommandSuggestionInput = input
+        val buf = ch.alloc().buffer()
+        buf.writeVarInt(sbSuggestion)
+        buf.writeVarInt(requestId)
+        buf.writeString(input)
         ch.writeAndFlush(buf)
     }
 
@@ -327,6 +354,8 @@ class MinecraftClient(
                 }
                 PacketKey.CB_SYSTEM_CHAT -> emitSystemChat(buf)
                 PacketKey.CB_PLAYER_CHAT -> emitPlayerChat(buf)
+                PacketKey.CB_COMMAND_SUGGESTIONS -> updateCommandSuggestions(buf)
+                PacketKey.CB_DECLARE_COMMANDS -> skipDeclareCommands(buf)
                 PacketKey.CB_START_CONFIGURATION -> acknowledgeConfiguration(ctx)
                 else -> Unit
             }
@@ -341,7 +370,23 @@ class MinecraftClient(
             val ack = ctx.alloc().buffer().writeVarInt(sbId)
             ctx.writeAndFlush(ack)
             chatSessionReported = false
+            latestCommandSuggestionInput = ""
+            _commandSuggestions.value = CommandSuggestions.Empty
             phase = Phase.CONFIGURATION
+        }
+
+        private fun updateCommandSuggestions(buf: ByteBuf) {
+            val input = latestCommandSuggestionInput
+            val parsed = runCatching {
+                CommandSuggestions.readResponse(buf, palette.chatComponentIsNbt, input)
+            }.getOrNull() ?: return
+            if (parsed.requestId == commandSuggestionRequestId && parsed.requestInput == latestCommandSuggestionInput) {
+                _commandSuggestions.value = parsed
+            }
+        }
+
+        private fun skipDeclareCommands(buf: ByteBuf) {
+            buf.skipBytes(buf.readableBytes())
         }
 
         /**
@@ -544,6 +589,8 @@ class MinecraftClient(
         }
 
         override fun channelInactive(ctx: ChannelHandlerContext) {
+            latestCommandSuggestionInput = ""
+            _commandSuggestions.value = CommandSuggestions.Empty
             if (_state.value is ConnectionState.Failed) return
             if (phase == Phase.PLAY) {
                 // 已进入游戏后断开 → 正常掉线，交上层重连

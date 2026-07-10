@@ -15,6 +15,8 @@ import com.bilicraft.handheld.config.ServerConfig
 import com.bilicraft.handheld.config.UiPreferences
 import com.bilicraft.handheld.protocol.ChatEvent
 import com.bilicraft.handheld.protocol.ChatSigningMode
+import com.bilicraft.handheld.protocol.CommandSuggestionState
+import com.bilicraft.handheld.protocol.CommandSuggestions
 import com.bilicraft.handheld.protocol.ConnectionState
 import com.bilicraft.handheld.service.ConnectionService
 import com.bilicraft.handheld.session.SessionEvent
@@ -67,6 +69,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _serverRuntime = MutableStateFlow(ServerRuntimeUiState())
     val serverRuntime: StateFlow<ServerRuntimeUiState> = _serverRuntime.asStateFlow()
 
+    private val _commandSuggestions = MutableStateFlow(CommandSuggestions.Empty)
+    val commandSuggestions: StateFlow<CommandSuggestionState> = _commandSuggestions.asStateFlow()
+
     private val _versions = MutableStateFlow(versionRepo.builtInGrouped())
     val versions: StateFlow<VersionRepository.Grouped> = _versions.asStateFlow()
 
@@ -109,6 +114,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             updateManager.checkForUpdate(silent = true, source = preferences.value.downloadSource)
         }
         viewModelScope.launch { mirrorSessionEvents() }
+        viewModelScope.launch { mirrorCommandSuggestions() }
         viewModelScope.launch {
             if (auth.currentSession() != null) {
                 val refreshed = auth.silentRefresh()
@@ -129,6 +135,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 is SessionEvent.State -> markServerState(serverId, event.state)
                 is SessionEvent.Chat -> appendServerChat(serverId, event.event)
             }
+        }
+    }
+
+    private suspend fun mirrorCommandSuggestions() {
+        session.commandSuggestions.collect { suggestions ->
+            _commandSuggestions.value = suggestions
         }
     }
 
@@ -198,6 +210,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun setCommandCompletionEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            uiConfigRepo.setCommandCompletionEnabled(enabled)
+            if (!enabled) {
+                _commandSuggestions.value = CommandSuggestions.Empty
+                session.requestCommandSuggestions("")
+            }
+            _uiMessage.value = if (enabled) "命令补全已开启" else "命令补全已关闭"
+        }
+    }
+
     fun refreshVersions(silent: Boolean = false) {
         viewModelScope.launch {
             val result = runCatching { versionRepo.refreshFromMojang() }
@@ -260,6 +283,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun connect(config: ServerConfig) {
+        _commandSuggestions.value = CommandSuggestions.Empty
         val previousActiveId = _serverRuntime.value.activeServerId
         if (previousActiveId != null && previousActiveId != config.id) {
             markServerState(previousActiveId, ConnectionState.Disconnected)
@@ -284,6 +308,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun stopConnection() {
+        _commandSuggestions.value = CommandSuggestions.Empty
         val activeId = _serverRuntime.value.activeServerId
         val ctx = getApplication<Application>()
         ctx.startService(ConnectionService.stopIntent(ctx))
@@ -297,7 +322,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun sendChat(serverId: String, text: String) {
         if (text.isBlank() || _serverRuntime.value.activeServerId != serverId) return
+        _commandSuggestions.value = CommandSuggestions.Empty
         session.sendChat(text)
+    }
+
+    fun requestCommandSuggestions(serverId: String, input: String) {
+        if (_serverRuntime.value.activeServerId != serverId || !preferences.value.commandCompletionEnabled) {
+            _commandSuggestions.value = CommandSuggestions.Empty
+            return
+        }
+        if (!input.startsWith("/")) {
+            _commandSuggestions.value = CommandSuggestions.clearFor(input)
+            session.requestCommandSuggestions(input)
+            return
+        }
+        session.requestCommandSuggestions(input)
     }
 
     fun createTool(title: String, url: String, description: String = "") {

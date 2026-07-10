@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -76,6 +77,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -97,6 +99,9 @@ import com.bilicraft.handheld.appicon.AppIcon
 import com.bilicraft.handheld.config.QuickToolLink
 import com.bilicraft.handheld.config.ServerConfig
 import com.bilicraft.handheld.protocol.ChatEvent
+import com.bilicraft.handheld.protocol.CommandSuggestion
+import com.bilicraft.handheld.protocol.CommandSuggestionState
+import com.bilicraft.handheld.protocol.CommandSuggestions
 import com.bilicraft.handheld.protocol.ConnectionState
 import com.bilicraft.handheld.update.DownloadSource
 import com.bilicraft.handheld.update.ReleaseInfo
@@ -191,6 +196,7 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
     val selectedVersion by vm.selectedVersion.collectAsStateWithLifecycle()
     val forceSigning by vm.forceSigning.collectAsStateWithLifecycle()
     val preferences by vm.preferences.collectAsStateWithLifecycle()
+    val commandSuggestions by vm.commandSuggestions.collectAsStateWithLifecycle()
 
     var selectedIndex by remember { mutableIntStateOf(0) }
     var editingServer by remember { mutableStateOf<ServerConfig?>(null) }
@@ -253,9 +259,12 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
                     log = selectedLog,
                     isActiveServer = isActiveServer,
                     chatAutoScroll = preferences.chatAutoScroll,
+                    commandCompletionEnabled = preferences.commandCompletionEnabled,
+                    commandSuggestions = commandSuggestions,
                     onConnect = { vm.connect(selectedServer) },
                     onStop = vm::stopConnection,
                     onSend = { vm.sendChat(selectedServer.id, it) },
+                    onRequestCommandSuggestions = { vm.requestCommandSuggestions(selectedServer.id, it) },
                     onEdit = { editingServer = selectedServer }
                 )
             }
@@ -331,14 +340,26 @@ private fun ServerSessionPage(
     log: List<ChatEvent>,
     isActiveServer: Boolean,
     chatAutoScroll: Boolean,
+    commandCompletionEnabled: Boolean,
+    commandSuggestions: CommandSuggestionState,
     onConnect: () -> Unit,
     onStop: () -> Unit,
     onSend: (String) -> Unit,
+    onRequestCommandSuggestions: (String) -> Unit,
     onEdit: () -> Unit
 ) {
     val connected = isActiveServer && conn is ConnectionState.Connected
     val connecting = isActiveServer && conn !is ConnectionState.Disconnected && conn !is ConnectionState.Failed
     var input by remember(server.id) { mutableStateOf("") }
+
+    LaunchedEffect(input, connected, commandCompletionEnabled) {
+        if (!connected || !commandCompletionEnabled || !input.startsWith("/")) {
+            onRequestCommandSuggestions("")
+            return@LaunchedEffect
+        }
+        delay(COMMAND_COMPLETION_DEBOUNCE_MS)
+        onRequestCommandSuggestions(input)
+    }
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
@@ -380,6 +401,18 @@ private fun ServerSessionPage(
         key(server.id) {
             ChatLog(log = log, autoScroll = chatAutoScroll, modifier = Modifier.weight(1f).fillMaxWidth())
         }
+        val visibleSuggestions = commandSuggestions.takeIf {
+            connected && commandCompletionEnabled && it.requestInput == input && it.hasSuggestions
+        }
+        if (visibleSuggestions != null) {
+            Spacer(Modifier.height(8.dp))
+            CommandSuggestionBar(
+                state = visibleSuggestions,
+                onSelect = { suggestion ->
+                    input = CommandSuggestions.apply(input, visibleSuggestions.start, visibleSuggestions.length, suggestion.text)
+                }
+            )
+        }
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
@@ -392,13 +425,37 @@ private fun ServerSessionPage(
             )
             Spacer(Modifier.width(8.dp))
             Button(
-                onClick = { onSend(input); input = "" },
+                onClick = { onSend(input); input = ""; onRequestCommandSuggestions("") },
                 enabled = connected && input.isNotBlank()
             ) {
                 Icon(Icons.Default.Send, contentDescription = null)
                 Spacer(Modifier.width(6.dp))
                 Text("发送")
             }
+        }
+    }
+}
+
+@Composable
+private fun CommandSuggestionBar(
+    state: CommandSuggestionState,
+    onSelect: (CommandSuggestion) -> Unit
+) {
+    LazyRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(state.suggestions.take(MAX_VISIBLE_COMMAND_SUGGESTIONS)) { suggestion ->
+            AssistChip(
+                onClick = { onSelect(suggestion) },
+                label = {
+                    Text(
+                        text = suggestion.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            )
         }
     }
 }
@@ -704,6 +761,18 @@ private fun SettingsScreen(vm: MainViewModel) {
                     Switch(
                         checked = preferences.chatAutoScroll,
                         onCheckedChange = vm::setChatAutoScroll
+                    )
+                }
+            )
+        }
+        item {
+            ListItem(
+                headlineContent = { Text("命令补全") },
+                supportingContent = { Text("输入 / 命令时向服务器请求候选项。关闭后不发补全请求。") },
+                trailingContent = {
+                    Switch(
+                        checked = preferences.commandCompletionEnabled,
+                        onCheckedChange = vm::setCommandCompletionEnabled
                     )
                 }
             )
@@ -1145,6 +1214,8 @@ private fun EmptyState(
 
 private val CHAT_BACKGROUND = Color(0xFF1E1E1E)
 private val CHAT_DEFAULT_TEXT = Color(0xFFE0E0E0)
+private const val COMMAND_COMPLETION_DEBOUNCE_MS = 200L
+private const val MAX_VISIBLE_COMMAND_SUGGESTIONS = 6
 
 private fun ChatEvent.toAnnotated(): AnnotatedString {
     if (spans.isEmpty()) return AnnotatedString(plainText)

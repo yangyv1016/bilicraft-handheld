@@ -38,6 +38,7 @@ enum class PacketKey(val phase: PacketPhase) {
     SB_KEEP_ALIVE_PLAY(PacketPhase.PLAY),
     SB_CHAT_MESSAGE(PacketPhase.PLAY),                  // play 阶段发送聊天
     SB_CHAT_COMMAND(PacketPhase.PLAY),                  // 1.19+ 斜杠命令走独立包（非 Chat Message）
+    SB_COMMAND_SUGGESTION(PacketPhase.PLAY),            // 1.13+ 命令补全请求（Command Suggestions Request）
     SB_CHAT_SESSION_UPDATE(PacketPhase.PLAY),           // 1.19.3+ session 体系：上报玩家公钥/会话
     SB_ACKNOWLEDGE_CONFIGURATION(PacketPhase.PLAY),     // 1.20.2+ 子服/世界切换：确认从 play 回到 configuration
 
@@ -53,6 +54,8 @@ enum class PacketKey(val phase: PacketPhase) {
     CB_PLAY_DISCONNECT(PacketPhase.PLAY),
     CB_JOIN_GAME(PacketPhase.PLAY),                     // play 首包 Login(play)：会话公钥须在此之后上报
     CB_KEEP_ALIVE_PLAY(PacketPhase.PLAY),
+    CB_COMMAND_SUGGESTIONS(PacketPhase.PLAY),           // 服务器返回的命令补全候选
+    CB_DECLARE_COMMANDS(PacketPhase.PLAY),              // 服务器声明 Brigadier 命令树
     CB_SYSTEM_CHAT(PacketPhase.PLAY),                   // 系统消息（服务器广播、命令回显等，多数聊天走这里）
     CB_PLAYER_CHAT(PacketPhase.PLAY),                   // 玩家签名聊天（结构复杂，这里只提取可读文本）
     CB_START_CONFIGURATION(PacketPhase.PLAY),           // 1.20.2+ 代理服切换子服时要求回到 configuration
@@ -124,6 +127,7 @@ object PaletteRegistry {
                 PacketKey.SB_KEEP_ALIVE_PLAY to play.sbKeepAlive,
                 PacketKey.SB_CHAT_MESSAGE to play.sbChatMessage,
                 PacketKey.SB_CHAT_COMMAND to play.sbChatCommand,
+                *(if (protocol >= 767) arrayOf(PacketKey.SB_COMMAND_SUGGESTION to play.sbCommandSuggestion) else emptyArray()),
                 PacketKey.SB_CHAT_SESSION_UPDATE to play.sbChatSessionUpdate,
                 PacketKey.SB_ACKNOWLEDGE_CONFIGURATION to play.sbAcknowledgeConfiguration,
             ),
@@ -139,6 +143,10 @@ object PaletteRegistry {
                 PacketKey.CB_PLAY_DISCONNECT to play.cbDisconnect,
                 PacketKey.CB_JOIN_GAME to play.cbJoinGame,
                 PacketKey.CB_KEEP_ALIVE_PLAY to play.cbKeepAlive,
+                *(if (protocol >= 767) arrayOf(
+                    PacketKey.CB_COMMAND_SUGGESTIONS to play.cbCommandSuggestions,
+                    PacketKey.CB_DECLARE_COMMANDS to play.cbDeclareCommands,
+                ) else emptyArray()),
                 PacketKey.CB_SYSTEM_CHAT to play.cbSystemChat,
                 PacketKey.CB_PLAYER_CHAT to play.cbPlayerChat,
                 PacketKey.CB_START_CONFIGURATION to play.cbStartConfiguration,
@@ -154,11 +162,14 @@ object PaletteRegistry {
     private data class PlayChatIds(
         val sbChatMessage: Int,
         val sbChatCommand: Int,          // SignedChatCommand（在线模式 1.20.6+）/ ChatCommand
+        val sbCommandSuggestion: Int,
         val sbKeepAlive: Int,
         val sbChatSessionUpdate: Int,
         val sbAcknowledgeConfiguration: Int,
         val cbDisconnect: Int,
         val cbKeepAlive: Int,
+        val cbCommandSuggestions: Int,
+        val cbDeclareCommands: Int,
         val cbSystemChat: Int,
         val cbPlayerChat: Int,
         val cbJoinGame: Int,
@@ -170,11 +181,14 @@ object PaletteRegistry {
         protocol >= 775 -> PlayChatIds(
             sbChatMessage = 0x09,
             sbChatCommand = 0x08,
+            sbCommandSuggestion = 0x0F,
             sbKeepAlive = 0x1C,
             sbChatSessionUpdate = 0x0A,
             sbAcknowledgeConfiguration = 0x10,
             cbDisconnect = 0x20,
             cbKeepAlive = 0x2C,
+            cbCommandSuggestions = 0x0F,
+            cbDeclareCommands = 0x10,
             cbSystemChat = 0x79,
             cbPlayerChat = 0x41,
             cbJoinGame = 0x31,
@@ -184,11 +198,14 @@ object PaletteRegistry {
         protocol >= 773 -> PlayChatIds(
             sbChatMessage = 0x08,
             sbChatCommand = 0x07,
+            sbCommandSuggestion = 0x0E,
             sbKeepAlive = 0x1B,
             sbChatSessionUpdate = 0x09,
             sbAcknowledgeConfiguration = 0x0F,
             cbDisconnect = 0x20,
             cbKeepAlive = 0x2B,
+            cbCommandSuggestions = 0x0F,
+            cbDeclareCommands = 0x10,
             cbSystemChat = 0x77,
             cbPlayerChat = 0x3F,
             cbJoinGame = 0x30,
@@ -198,11 +215,14 @@ object PaletteRegistry {
         protocol >= 771 -> PlayChatIds(
             sbChatMessage = 0x08,
             sbChatCommand = 0x07,
+            sbCommandSuggestion = 0x0E,
             sbKeepAlive = 0x1B,
             sbChatSessionUpdate = 0x09,
             sbAcknowledgeConfiguration = 0x0F,
             cbDisconnect = 0x1C,
             cbKeepAlive = 0x26,
+            cbCommandSuggestions = 0x0F,
+            cbDeclareCommands = 0x10,
             cbSystemChat = 0x72,
             cbPlayerChat = 0x3A,
             cbJoinGame = 0x2B,
@@ -212,11 +232,14 @@ object PaletteRegistry {
         protocol >= 770 -> PlayChatIds(
             sbChatMessage = 0x07,
             sbChatCommand = 0x06,
+            sbCommandSuggestion = 0x0D,
             sbKeepAlive = 0x1A,
             sbChatSessionUpdate = 0x08,
             sbAcknowledgeConfiguration = 0x0E,
             cbDisconnect = 0x1C,
             cbKeepAlive = 0x26,
+            cbCommandSuggestions = 0x0F,
+            cbDeclareCommands = 0x10,
             cbSystemChat = 0x72,
             cbPlayerChat = 0x3A,
             cbJoinGame = 0x2B,
@@ -226,11 +249,14 @@ object PaletteRegistry {
         protocol >= 768 -> PlayChatIds(
             sbChatMessage = 0x07,
             sbChatCommand = 0x06,
+            sbCommandSuggestion = 0x0D,
             sbKeepAlive = 0x1A,
             sbChatSessionUpdate = 0x08,
             sbAcknowledgeConfiguration = 0x0E,
             cbDisconnect = 0x1D,
             cbKeepAlive = 0x27,
+            cbCommandSuggestions = 0x10,
+            cbDeclareCommands = 0x11,
             cbSystemChat = 0x73,
             cbPlayerChat = 0x3B,
             cbJoinGame = 0x2C,
@@ -242,11 +268,14 @@ object PaletteRegistry {
         else -> PlayChatIds(
             sbChatMessage = 0x06,
             sbChatCommand = 0x05,
+            sbCommandSuggestion = 0x0B,
             sbKeepAlive = 0x18,
             sbChatSessionUpdate = 0x07,
             sbAcknowledgeConfiguration = 0x0C,
             cbDisconnect = 0x1D,
             cbKeepAlive = 0x26,
+            cbCommandSuggestions = 0x10,
+            cbDeclareCommands = 0x11,
             cbSystemChat = 0x6C,
             cbPlayerChat = 0x39,
             cbJoinGame = 0x2B,

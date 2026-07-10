@@ -46,6 +46,7 @@ class ConnectionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        AppContainer.init(applicationContext)
         createChannel()
         startForeground(NOTIF_ID, buildNotification("正在启动…"))
         acquireWakeLock()

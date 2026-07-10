@@ -5,6 +5,7 @@ import com.bilicraft.handheld.appicon.AppIconManager
 import com.bilicraft.handheld.auth.AuthClient
 import com.bilicraft.handheld.auth.AuthManager
 import com.bilicraft.handheld.config.UiConfigRepository
+import com.bilicraft.handheld.protocol.MinecraftTranslations
 import com.bilicraft.handheld.session.SessionController
 import com.bilicraft.handheld.storage.SecureStore
 import com.bilicraft.handheld.update.UpdateClient
@@ -42,6 +43,9 @@ object AppContainer {
         synchronized(this) {
             if (initialized) return
             val app = context.applicationContext
+            app.assets.open("minecraft/zh_cn.json").bufferedReader().use { reader ->
+                MinecraftTranslations.loadJson(reader.readText())
+            }
             secureStore = SecureStore(app)
             authManager = AuthManager(AuthClient(BuildConfig.MS_CLIENT_ID), secureStore)
             versionRepo = VersionRepository(app)

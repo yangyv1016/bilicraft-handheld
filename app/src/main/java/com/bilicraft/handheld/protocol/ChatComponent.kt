@@ -17,8 +17,8 @@ import org.json.JSONObject
  *
  * 样式继承规则（对齐 vanilla）：子组件继承父组件样式，除非自身字段覆盖；
  * text 内嵌的 §x 码在继承样式之上叠加，颜色码会重置格式（与 §r 一致）。
- * 翻译组件套用内置模板（把 %s 占位符替换为 with 参数），
- * 否则用户会看到 "multiplayer.player.joined MyH5392" 这样的原始 key。
+ * 翻译组件优先查 MinecraftTranslations 的完整语言表（把 %s/%1$s 占位符替换为 with 参数），
+ * 未命中时才使用最小兜底，避免服务器消息露出 "entity.minecraft.creeper" 这类原始 key。
  */
 object ChatComponent {
 
@@ -50,12 +50,10 @@ object ChatComponent {
     )
 
     /**
-     * 内置翻译模板表（vanilla en_us 子集，只覆盖聊天链路高频 key）。
-     *
-     * 模板占位符遵循 Java 格式串：%s 顺序取参、%1$s 按索引取参、%% 表示字面 %。
-     * 未登记的 key 不能只拼 with 参数；否则系统消息会退化成“只剩玩家名”。
+     * 资源未加载时的最小兜底表。
+     * 完整 translate key 查表由 MinecraftTranslations 提供，这里只保留启动早期/测试环境的安全降级。
      */
-    private val translationTemplates: Map<String, String> = mapOf(
+    private val fallbackTranslationTemplates: Map<String, String> = mapOf(
         "chat.type.text" to "<%s> %s",
         "chat.type.announcement" to "[%s] %s",
         "chat.type.emote" to "* %s %s",
@@ -164,7 +162,7 @@ object ChatComponent {
             val args = obj.optJSONArray("with")?.let { arr ->
                 List(arr.length()) { i -> spansFromJsonValue(arr.get(i), style) }
             } ?: emptyList()
-            appendTranslation(key, args, style, out)
+            appendTranslation(key, obj.optString("fallback", ""), args, style, out)
         }
         obj.optJSONArray("extra")?.let { appendJsonArray(it, style, out) }
     }
@@ -208,7 +206,8 @@ object ChatComponent {
                 (tag.entries["translate"] as? NbtTag.NbtString)?.let { keyTag ->
                     val args = (tag.entries["with"] as? NbtTag.NbtList)
                         ?.items?.map { spansFromNbtValue(it, style) } ?: emptyList()
-                    appendTranslation(keyTag.value, args, style, out)
+                    val fallback = (tag.entries["fallback"] as? NbtTag.NbtString)?.value.orEmpty()
+                    appendTranslation(keyTag.value, fallback, args, style, out)
                 }
                 tag.entries["extra"]?.let { appendNbt(it, style, out) }
             }
@@ -291,11 +290,15 @@ object ChatComponent {
      */
     private fun appendTranslation(
         key: String,
+        fallback: String,
         args: List<List<ChatSpan>>,
         style: Style,
         out: MutableList<ChatSpan>
     ) {
-        val template = translationTemplates[key] ?: fallbackTemplate(key, args.size)
+        val template = MinecraftTranslations.templateFor(key)
+            ?: fallbackTranslationTemplates[key]
+            ?: fallback.takeIf { it.isNotEmpty() }
+            ?: fallbackTemplate(key, args.size)
         if (template == null) {
             appendUnknownTranslation(key, args, style, out)
             return
@@ -325,7 +328,7 @@ object ChatComponent {
     }
 
     /**
-     * 套用 Java 风格格式串：%s 顺序取参、%n$s 索引取参、%% 字面百分号。
+     * 套用 Java 风格格式串：%s/%d 顺序取参、%n$s/%n$d 索引取参、%% 字面百分号。
      * 越界索引替换为空串，避免抛异常。
      */
     private fun applyTemplate(
@@ -356,13 +359,13 @@ object ChatComponent {
             val next = template[i + 1]
             when {
                 next == '%' -> { literal.append('%'); i += 2 }
-                next == 's' -> {
+                next == 's' || next == 'd' -> {
                     appendArg(autoIndex); autoIndex++; i += 2
                 }
                 next.isDigit() -> {
                     var j = i + 1
                     while (j < template.length && template[j].isDigit()) j++
-                    if (j + 1 < template.length && template[j] == '$' && template[j + 1] == 's') {
+                    if (j + 1 < template.length && template[j] == '$' && (template[j + 1] == 's' || template[j + 1] == 'd')) {
                         appendArg(template.substring(i + 1, j).toInt() - 1)
                         i = j + 2
                     } else {

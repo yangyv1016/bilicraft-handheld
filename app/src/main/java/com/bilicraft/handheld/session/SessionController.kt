@@ -5,6 +5,8 @@ import com.bilicraft.handheld.plugin.PluginHost
 import com.bilicraft.handheld.plugin.PluginManager
 import com.bilicraft.handheld.protocol.ChatEvent
 import com.bilicraft.handheld.protocol.ChatSigningMode
+import com.bilicraft.handheld.protocol.CommandSuggestionState
+import com.bilicraft.handheld.protocol.CommandSuggestions
 import com.bilicraft.handheld.protocol.ConnectionState
 import com.bilicraft.handheld.protocol.MinecraftClient
 import com.bilicraft.handheld.protocol.PaletteRegistry
@@ -63,6 +65,9 @@ class SessionController(
     private val _connState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connState: StateFlow<ConnectionState> = _connState.asStateFlow()
 
+    private val _commandSuggestions = MutableStateFlow(CommandSuggestions.Empty)
+    val commandSuggestions: StateFlow<CommandSuggestionState> = _commandSuggestions.asStateFlow()
+
     private val _events = MutableSharedFlow<SessionEvent>(extraBufferCapacity = 256)
     val events: SharedFlow<SessionEvent> = _events.asSharedFlow()
 
@@ -97,6 +102,7 @@ class SessionController(
         pumpJob?.cancel()
         val previousClient = client
         client = null
+        _commandSuggestions.value = CommandSuggestions.Empty
         val request = ConnectionRequest(++requestSeq, serverId, address, version, mode)
         activeRequest = request
         publishState(request, ConnectionState.Connecting)
@@ -114,6 +120,7 @@ class SessionController(
         requestSeq++
         val previousClient = client
         client = null
+        _commandSuggestions.value = CommandSuggestions.Empty
         previousClient?.disconnect()
         publishState(stoppedServerId, ConnectionState.Disconnected)
     }
@@ -121,6 +128,10 @@ class SessionController(
     fun sendChat(text: String) {
         // 不做本地回显：服务器会把自己的消息（含命令回执）广播回来，本地再显示会重复。
         client?.sendChat(text)
+    }
+
+    fun requestCommandSuggestions(input: String) {
+        client?.requestCommandSuggestions(input)
     }
 
     // ---- 内部编排 ----
@@ -192,6 +203,12 @@ class SessionController(
                     if (!request.isCurrent()) return@collect
                     publishChat(request, ev)
                     if (PLUGINS_ENABLED) pluginManager.dispatchChat(ev)
+                }
+            }
+            launch {
+                mc.commandSuggestions.collect { suggestions ->
+                    if (!request.isCurrent()) return@collect
+                    _commandSuggestions.value = suggestions
                 }
             }
         }

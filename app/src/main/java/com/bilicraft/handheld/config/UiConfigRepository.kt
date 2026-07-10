@@ -44,6 +44,7 @@ data class QuickToolLink(
 @Serializable
 data class UiPreferences(
     val chatAutoScroll: Boolean = true,
+    val commandCompletionEnabled: Boolean = true,
     val downloadSource: DownloadSource = DownloadSource.DEFAULT
 )
 
@@ -84,6 +85,12 @@ class UiConfigRepository(context: Context) {
 
     suspend fun setChatAutoScroll(enabled: Boolean) = withContext(Dispatchers.IO) {
         val next = _preferences.value.copy(chatAutoScroll = enabled)
+        _preferences.value = next
+        saveValue(preferencesFile, next)
+    }
+
+    suspend fun setCommandCompletionEnabled(enabled: Boolean) = withContext(Dispatchers.IO) {
+        val next = _preferences.value.copy(commandCompletionEnabled = enabled)
         _preferences.value = next
         saveValue(preferencesFile, next)
     }

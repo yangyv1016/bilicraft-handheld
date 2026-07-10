@@ -728,6 +728,7 @@ private fun SettingsScreen(vm: MainViewModel) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun AccountRow(
     account: com.bilicraft.handheld.auth.AccountSummary,

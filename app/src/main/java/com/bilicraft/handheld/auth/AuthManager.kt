@@ -24,6 +24,10 @@ class AuthManager(
     private val _state = MutableStateFlow<AuthState>(AuthState.Idle)
     val state: StateFlow<AuthState> = _state.asStateFlow()
 
+    // 账户列表（脱敏摘要），供 UI 响应式渲染。SecureStore 无响应能力，故每次变更后手动刷新。
+    private val _accounts = MutableStateFlow(readAccountSummaries())
+    val accounts: StateFlow<List<AccountSummary>> = _accounts.asStateFlow()
+
     /**
      * 启动设备码登录。这是个长流程 suspend：
      * 申请设备码 → 展示给用户 → 轮询 → 换取全链路 token → 落盘。
@@ -70,13 +74,38 @@ class AuthManager(
     /** 读取本地会话（不触网） */
     fun currentSession(): AuthSession? = store.loadSession()
 
+    /**
+     * 切换活跃账户，随后对新账户做一次静默刷新（其 token 可能已过期）。
+     * 返回切换并刷新后的可用会话；uuid 无效或刷新失败返回 null。
+     */
+    suspend fun switchAccount(uuid: String): AuthSession? {
+        val switched = store.setActiveAccount(uuid) ?: return null
+        refreshAccounts()
+        _state.value = AuthState.Success(McProfile(switched.mcUuid, switched.mcUsername))
+        return if (switched.isMcTokenNearExpiry()) silentRefresh() else switched
+    }
+
+    /**
+     * 移除指定账户。若移除的是活跃账户，活跃指针会顺延到剩余第一个。
+     * 返回移除后仍活跃的会话（无剩余账户则为 null，UI 据此回到未登录态）。
+     */
+    fun removeAccount(uuid: String): AuthSession? {
+        val remainingActive = store.removeAccount(uuid)
+        refreshAccounts()
+        _state.value = remainingActive
+            ?.let { AuthState.Success(McProfile(it.mcUuid, it.mcUsername)) }
+            ?: AuthState.Idle
+        return remainingActive
+    }
+
     /** 获取玩家签名证书（强制签名模式用）。委托给 AuthClient，私钥不落盘。 */
     suspend fun fetchCertificate(mcAccessToken: String): AuthClient.Step<PlayerCertificate> =
         client.fetchCertificate(mcAccessToken)
 
-    /** 登出 */
+    /** 登出全部账户 */
     fun logout() {
         store.clear()
+        refreshAccounts()
         _state.value = AuthState.Idle
     }
 
@@ -116,6 +145,7 @@ class AuthManager(
             mcTokenExpiresIn = mc.expiresIn
         )
         store.saveSession(session)
+        refreshAccounts()
         return session
     }
 
@@ -124,5 +154,17 @@ class AuthManager(
 
     private fun fail(reason: String) {
         _state.value = AuthState.Failed(reason)
+    }
+
+    /** 把存储层账户表投影为脱敏摘要，并标记当前活跃账户 */
+    private fun readAccountSummaries(): List<AccountSummary> {
+        val activeUuid = store.loadSession()?.mcUuid
+        return store.loadAllAccounts().map {
+            AccountSummary(uuid = it.mcUuid, username = it.mcUsername, isActive = it.mcUuid == activeUuid)
+        }
+    }
+
+    private fun refreshAccounts() {
+        _accounts.value = readAccountSummaries()
     }
 }

@@ -603,25 +603,38 @@ private fun ToolEditorDialog(
 private fun SettingsScreen(vm: MainViewModel) {
     val pluginNames = vm.pluginNames
     val preferences by vm.preferences.collectAsStateWithLifecycle()
+    val accountList by vm.accounts.collectAsStateWithLifecycle()
+    var removingAccountUuid by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(Modifier.fillMaxSize()) {
         item { CenterAlignedTopAppBar(title = { Text("设置") }) }
 
         item { SectionTitle("账号管理") }
-        item {
-            ListItem(
-                headlineContent = { Text("当前账号") },
-                supportingContent = { Text(vm.currentAccountName) },
-                leadingContent = { Icon(Icons.Default.AccountCircle, contentDescription = null) }
-            )
+        val accounts = accountList
+        if (accounts.isEmpty()) {
+            item {
+                ListItem(
+                    headlineContent = { Text("当前账号") },
+                    supportingContent = { Text(vm.currentAccountName) },
+                    leadingContent = { Icon(Icons.Default.AccountCircle, contentDescription = null) }
+                )
+            }
+        } else {
+            items(accounts, key = { it.uuid }) { account ->
+                AccountRow(
+                    account = account,
+                    onSwitch = { vm.switchAccount(account.uuid) },
+                    onRemove = { removingAccountUuid = account.uuid }
+                )
+                HorizontalDivider()
+            }
         }
         item {
             SettingActions(
                 actions = listOf(
                     SettingAction("添加账号", Icons.Default.Add, vm::addAccount),
-                    SettingAction("切换账号", Icons.Default.SwapHoriz, vm::switchAccount),
                     SettingAction("刷新 Token", Icons.Default.Refresh, vm::refreshToken),
-                    SettingAction("退出登录", Icons.Default.Delete, vm::logout)
+                    SettingAction("退出全部", Icons.Default.Delete, vm::logout)
                 )
             )
         }
@@ -694,6 +707,60 @@ private fun SettingsScreen(vm: MainViewModel) {
         }
         item { Spacer(Modifier.height(24.dp)) }
     }
+
+    removingAccountUuid?.let { uuid ->
+        val target = accountList.firstOrNull { it.uuid == uuid }
+        AlertDialog(
+            onDismissRequest = { removingAccountUuid = null },
+            icon = { Icon(Icons.Default.Delete, contentDescription = null) },
+            title = { Text("移除账号") },
+            text = { Text("确定移除账号「${target?.username ?: uuid}」？该账号的登录凭据将从本机抹除，需要时可重新登录。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.removeAccount(uuid)
+                    removingAccountUuid = null
+                }) { Text("移除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { removingAccountUuid = null }) { Text("取消") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun AccountRow(
+    account: com.bilicraft.handheld.auth.AccountSummary,
+    onSwitch: () -> Unit,
+    onRemove: () -> Unit
+) {
+    ListItem(
+        headlineContent = { Text(account.username, fontWeight = FontWeight.SemiBold) },
+        supportingContent = { Text(if (account.isActive) "当前使用中" else "点击切换到该账号") },
+        leadingContent = {
+            Icon(
+                Icons.Default.AccountCircle,
+                contentDescription = null,
+                tint = if (account.isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        trailingContent = {
+            Row {
+                if (!account.isActive) {
+                    IconButton(onClick = onSwitch) {
+                        Icon(Icons.Default.SwapHoriz, contentDescription = "切换到该账号")
+                    }
+                }
+                IconButton(onClick = onRemove) {
+                    Icon(Icons.Default.Delete, contentDescription = "移除该账号")
+                }
+            }
+        },
+        modifier = Modifier.combinedClickable(
+            onClick = { if (!account.isActive) onSwitch() },
+            onLongClick = onRemove
+        )
+    )
 }
 
 private data class SettingAction(

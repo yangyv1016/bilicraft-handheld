@@ -13,8 +13,8 @@ android {
         applicationId = "com.bilicraft.handheld"
         minSdk = 24          // Android 7.0，覆盖绝大多数在用设备
         targetSdk = 34
-        versionCode = 5
-        versionName = "0.1.4"
+        versionCode = 6
+        versionName = "0.1.5"
 
         // PrismLauncher 使用的公开 Azure client_id（开源启动器通用）。
         // 如需替换为自建 Azure 应用，改这里即可，详见 README。

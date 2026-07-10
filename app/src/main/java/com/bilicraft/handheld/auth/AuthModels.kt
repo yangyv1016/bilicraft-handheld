@@ -45,6 +45,16 @@ data class McProfile(
 )
 
 /**
+ * 账户摘要：给 UI 展示账户列表用的脱敏视图。
+ * 刻意只暴露玩家名、UUID 与是否为当前活跃账户，绝不携带任何 token。
+ */
+data class AccountSummary(
+    val uuid: String,
+    val username: String,
+    val isActive: Boolean
+)
+
+/**
  * 玩家签名证书（强制签名模式必需）。
  *
  * 来自 Mojang 的 player/certificates 接口，含一对 RSA 密钥：

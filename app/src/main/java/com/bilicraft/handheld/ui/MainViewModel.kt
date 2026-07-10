@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.bilicraft.handheld.AppContainer
 import com.bilicraft.handheld.BuildConfig
+import com.bilicraft.handheld.auth.AccountSummary
 import com.bilicraft.handheld.auth.AuthState
 import com.bilicraft.handheld.config.QuickToolLink
 import com.bilicraft.handheld.config.ServerConfig
@@ -49,6 +50,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val uiConfigRepo = AppContainer.uiConfigRepo
 
     val authState: StateFlow<AuthState> = auth.state
+    val accounts: StateFlow<List<AccountSummary>> = auth.accounts
     val servers: StateFlow<List<ServerConfig>> = uiConfigRepo.servers
     val quickTools: StateFlow<List<QuickToolLink>> = uiConfigRepo.tools
     val preferences: StateFlow<UiPreferences> = uiConfigRepo.preferences
@@ -316,8 +318,38 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         startLogin()
     }
 
-    fun switchAccount() {
-        _uiMessage.value = "当前底层仅暴露单账号会话，暂不支持多账号切换"
+    /**
+     * 切换活跃账户。凭证随账户改变，因此先断开当前连接，切换后由用户重新连接。
+     * 切换会对新账户做一次静默刷新（token 可能已过期）。
+     */
+    fun switchAccount(uuid: String) {
+        val current = auth.currentSession()
+        if (current?.mcUuid == uuid) return
+        viewModelScope.launch {
+            stopConnection()
+            val switched = auth.switchAccount(uuid)
+            _loggedIn.value = switched != null
+            _uiMessage.value = when {
+                switched == null -> "切换账号失败，请重新登录该账号"
+                else -> "已切换到 ${switched.mcUsername}"
+            }
+        }
+    }
+
+    /**
+     * 移除指定账户。若移除的是当前活跃账户，先断开连接；
+     * 移除后若已无任何账户，回到未登录态。
+     */
+    fun removeAccount(uuid: String) {
+        val wasActive = auth.currentSession()?.mcUuid == uuid
+        if (wasActive) stopConnection()
+        val remainingActive = auth.removeAccount(uuid)
+        _loggedIn.value = remainingActive != null
+        _uiMessage.value = if (remainingActive != null) {
+            "账号已移除，当前账号：${remainingActive.mcUsername}"
+        } else {
+            "账号已移除"
+        }
     }
 
     fun openPluginLog(name: String) {

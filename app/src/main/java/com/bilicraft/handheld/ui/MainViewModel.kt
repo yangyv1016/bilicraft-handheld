@@ -6,6 +6,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.bilicraft.handheld.AppContainer
 import com.bilicraft.handheld.BuildConfig
+import com.bilicraft.handheld.appicon.AppIcon
+import com.bilicraft.handheld.appicon.AppIconCatalog
 import com.bilicraft.handheld.auth.AccountSummary
 import com.bilicraft.handheld.auth.AuthState
 import com.bilicraft.handheld.config.QuickToolLink
@@ -53,6 +55,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val versionRepo = AppContainer.versionRepo
     private val uiConfigRepo = AppContainer.uiConfigRepo
     private val updateManager = AppContainer.updateManager
+    private val appIconManager = AppContainer.appIconManager
 
     val authState: StateFlow<AuthState> = auth.state
     val updateState: StateFlow<UpdateState> = updateManager.state
@@ -81,6 +84,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _loginOverlay = MutableStateFlow(false)
     val loginOverlay: StateFlow<Boolean> = _loginOverlay.asStateFlow()
+
+    val appIcons: List<AppIcon> = AppIconCatalog.all
+    private val _currentAppIcon = MutableStateFlow(appIconManager.current())
+    val currentAppIcon: StateFlow<AppIcon> = _currentAppIcon.asStateFlow()
 
     private var loginJob: Job? = null
 
@@ -376,6 +383,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             uiConfigRepo.setDownloadSource(source)
             _uiMessage.value = "更新下载源已切换为「${source.displayName}」"
         }
+    }
+
+    fun selectAppIcon(icon: AppIcon) {
+        if (icon.id == _currentAppIcon.value.id) return
+        appIconManager.apply(icon)
+        _currentAppIcon.value = icon
+        _uiMessage.value = "启动图标已切换为「${icon.displayName}」，桌面图标可能稍后刷新"
     }
 
     fun installUpdate(apkFile: File) {

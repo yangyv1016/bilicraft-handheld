@@ -29,12 +29,39 @@
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|keyboardHidden">
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
+        <!--
+          桌面启动图标改由 activity-alias 承载：每个 alias = 一个可选图标。
+          切换逻辑见 AppIconManager，通过 PackageManager 启停 alias，保证任意时刻恰好一个启用。
+          下面标记区内的 alias 由 Gradle 任务 syncAppIcons 依据 icons/*.png 自动生成，勿手改。
+        -->
+        <!-- APP-ICON AUTO-GENERATED START -->
+        <activity-alias
+            android:name=".ui.alias.Icon"
+            android:targetActivity=".ui.MainActivity"
+            android:icon="@drawable/app_icon_icon"
+            android:label="@string/app_name"
+            android:exported="true"
+            android:enabled="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
+        </activity-alias>
+        <activity-alias
+            android:name=".ui.alias.Bihoyo"
+            android:targetActivity=".ui.MainActivity"
+            android:icon="@drawable/app_icon_bihoyo"
+            android:label="@string/app_name"
+            android:exported="true"
+            android:enabled="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <!-- APP-ICON AUTO-GENERATED END -->
 
         <!-- 前台 Service：锁屏保持 MC 连接（dataSync 类型，配合持久通知） -->
         <service

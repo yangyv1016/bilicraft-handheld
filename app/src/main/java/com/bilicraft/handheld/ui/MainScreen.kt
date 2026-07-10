@@ -1,6 +1,7 @@
 package com.bilicraft.handheld.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -9,11 +10,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -22,9 +25,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
@@ -39,7 +46,6 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilledTonalButton
@@ -62,7 +68,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -77,6 +82,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -87,6 +93,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.bilicraft.handheld.appicon.AppIcon
 import com.bilicraft.handheld.config.QuickToolLink
 import com.bilicraft.handheld.config.ServerConfig
 import com.bilicraft.handheld.protocol.ChatEvent
@@ -147,6 +154,34 @@ fun MainScreen(vm: MainViewModel) {
     }
 }
 
+/**
+ * 统一的紧凑标题栏。
+ * 相比 M3 TopAppBar 的固定 64dp + 自带状态栏 inset，这里只占约 48dp，
+ * 且不重复消费状态栏 padding（外层 Scaffold 已处理），避免标题栏视觉过高。
+ */
+@Composable
+private fun ScreenHeader(
+    title: String,
+    actions: @Composable RowScope.() -> Unit = {}
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .padding(start = 16.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        actions()
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun ServerSessionsScreen(vm: MainViewModel) {
@@ -167,8 +202,8 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = { Text("服务器会话") },
+        ScreenHeader(
+            title = "服务器会话",
             actions = {
                 IconButton(onClick = { showCreateDialog = true }) {
                     Icon(Icons.Default.Add, contentDescription = "新增服务器")
@@ -478,8 +513,8 @@ private fun QuickToolsScreen(vm: MainViewModel) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("快捷工具") },
+            ScreenHeader(
+                title = "快捷工具",
                 actions = {
                     IconButton(onClick = { showEditor = true }) {
                         Icon(Icons.Default.Add, contentDescription = "新增快捷工具")
@@ -614,9 +649,21 @@ private fun SettingsScreen(vm: MainViewModel) {
     val updateState by vm.updateState.collectAsStateWithLifecycle()
     var removingAccountUuid by remember { mutableStateOf<String?>(null) }
     var showSourcePicker by remember { mutableStateOf(false) }
+    var showIconPicker by remember { mutableStateOf(false) }
+    val currentAppIcon by vm.currentAppIcon.collectAsStateWithLifecycle()
+
+    if (showIconPicker) {
+        AppIconPickerScreen(
+            icons = vm.appIcons,
+            current = currentAppIcon,
+            onSelect = vm::selectAppIcon,
+            onBack = { showIconPicker = false }
+        )
+        return
+    }
 
     LazyColumn(Modifier.fillMaxSize()) {
-        item { CenterAlignedTopAppBar(title = { Text("设置") }) }
+        item { ScreenHeader(title = "设置") }
 
         item { SectionTitle("账号管理") }
         val accounts = accountList
@@ -659,6 +706,17 @@ private fun SettingsScreen(vm: MainViewModel) {
                         onCheckedChange = vm::setChatAutoScroll
                     )
                 }
+            )
+        }
+
+        item { SectionTitle("个性化") }
+        item {
+            ListItem(
+                headlineContent = { Text("替换启动图标") },
+                supportingContent = { Text("当前：${currentAppIcon.displayName}") },
+                leadingContent = { Icon(Icons.Default.Image, contentDescription = null) },
+                trailingContent = { Icon(Icons.Default.ChevronRight, contentDescription = null) },
+                modifier = Modifier.clickable { showIconPicker = true }
             )
         }
 
@@ -930,6 +988,104 @@ private fun DownloadSourceDialog(
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } }
     )
+}
+
+/**
+ * 启动图标选择页（全屏子页面）。
+ * 卡片列表，每张卡预览图标 + 名称 + 描述，选中项右侧打勾。
+ * 图标切换的平台副作用（桌面图标短暂消失、可能被移出最近任务）在页顶提示，避免用户误以为出错。
+ */
+@Composable
+private fun AppIconPickerScreen(
+    icons: List<AppIcon>,
+    current: AppIcon,
+    onSelect: (AppIcon) -> Unit,
+    onBack: () -> Unit
+) {
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .padding(start = 4.dp, end = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+            }
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = "替换启动图标",
+                style = MaterialTheme.typography.titleLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        LazyColumn(Modifier.fillMaxSize()) {
+            item {
+                Text(
+                    "切换后，桌面图标可能短暂消失再重现，部分系统会把应用从最近任务中清除，这是系统机制，属正常现象。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
+            items(icons, key = { it.id }) { icon ->
+                AppIconOption(
+                    icon = icon,
+                    selected = icon.id == current.id,
+                    onClick = { onSelect(icon) }
+                )
+            }
+            item { Spacer(Modifier.height(24.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun AppIconOption(
+    icon: AppIcon,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer
+            else MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Image(
+                painter = painterResource(icon.previewResId),
+                contentDescription = icon.displayName,
+                modifier = Modifier.size(56.dp).clip(RoundedCornerShape(12.dp))
+            )
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f)) {
+                Text(icon.displayName, fontWeight = FontWeight.SemiBold)
+                Text(
+                    icon.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (selected) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = "已选用",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
 }
 
 private data class SettingAction(

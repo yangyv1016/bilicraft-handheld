@@ -9,6 +9,9 @@ build/
 local.properties
 .cxx/
 
+# 应用启动图标：由 syncAppIcons 从 icons/ 自动生成，不入库
+/app/src/main/res/drawable/app_icon_*.png
+
 # 签名密钥：绝不提交进仓库
 *.keystore
 *.jks

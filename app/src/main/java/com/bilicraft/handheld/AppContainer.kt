@@ -1,6 +1,7 @@
 package com.bilicraft.handheld
 
 import android.content.Context
+import com.bilicraft.handheld.appicon.AppIconManager
 import com.bilicraft.handheld.auth.AuthClient
 import com.bilicraft.handheld.auth.AuthManager
 import com.bilicraft.handheld.config.UiConfigRepository
@@ -33,6 +34,8 @@ object AppContainer {
         private set
     lateinit var updateManager: UpdateManager
         private set
+    lateinit var appIconManager: AppIconManager
+        private set
 
     fun init(context: Context) {
         if (initialized) return
@@ -49,6 +52,7 @@ object AppContainer {
                 client = UpdateClient(owner = "yangyv1016", repo = "bilicraft-handheld"),
                 currentVersionName = BuildConfig.VERSION_NAME
             )
+            appIconManager = AppIconManager(app)
             initialized = true
         }
     }

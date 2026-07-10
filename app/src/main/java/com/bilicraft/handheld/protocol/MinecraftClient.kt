@@ -31,7 +31,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.MediaType.Companion.toMediaType
 import org.json.JSONObject
 import javax.crypto.Cipher
-import android.util.Log
 
 /**
  * MC Java 协议客户端主状态机。
@@ -240,7 +239,6 @@ class MinecraftClient(
         }
 
         private fun handleLogin(ctx: ChannelHandlerContext, packetId: Int, buf: ByteBuf) {
-            Log.i(PROBE_TAG, "LOGIN 收到包 id=0x${packetId.toString(16)} → key=${palette.cbKey(packetId, PacketPhase.LOGIN)}")
             when (palette.cbKey(packetId, PacketPhase.LOGIN)) {
                 PacketKey.CB_SET_COMPRESSION -> {
                     val threshold = buf.readVarInt()
@@ -355,11 +353,9 @@ class MinecraftClient(
         private fun sendChatSessionUpdateIfNeeded(ctx: ChannelHandlerContext) {
             val cert = certificate
             if (cert == null || !palette.sessionSigning || signer == null) {
-                Log.i(PROBE_TAG, "跳过 ChatSessionUpdate：cert=${cert != null} sessionSigning=${palette.sessionSigning} signer=${signer != null}")
                 return
             }
             val sbId = palette.sbId(PacketKey.SB_CHAT_SESSION_UPDATE) ?: return
-            Log.i(PROBE_TAG, "发送 ChatSessionUpdate id=0x${sbId.toString(16)} expiresAt=${cert.expiresAtEpochMs}(${cert.expiresAtEpochMs - System.currentTimeMillis()}ms后) pubKeyDer=${cert.publicKeyDer.size}B sigV2=${cert.publicKeySignatureV2.size}B")
             val buf = ctx.alloc().buffer()
             buf.writeVarInt(sbId)
             buf.writeUuid(messageChain.sessionId)
@@ -520,10 +516,7 @@ class MinecraftClient(
 
             // 向 Mojang sessionserver 报到，证明身份
             val hash = McCrypto.serverHash(serverId, secret, pubKey)
-            val joinStart = System.currentTimeMillis()
-            Log.i(PROBE_TAG, "收到 Encryption Request，开始 joinServer（sessionserver.mojang.com）…")
             val joined = joinServer(hash)
-            Log.i(PROBE_TAG, "joinServer 返回 $joined，耗时 ${System.currentTimeMillis() - joinStart}ms")
             if (!joined) {
                 _state.value = ConnectionState.Failed("会话校验失败（joinServer）", retriable = false)
                 ctx.close()
@@ -536,7 +529,6 @@ class MinecraftClient(
             resp.writeByteArray(McCrypto.rsaEncrypt(pubKey, secret.encoded))
             resp.writeByteArray(McCrypto.rsaEncrypt(pubKey, verifyToken))
             ctx.writeAndFlush(resp)
-            Log.i(PROBE_TAG, "已发送 Encryption Response，等待 Login Success…")
 
             // 之后所有流量加密：在 frame 之前插入加/解密 handler
             val enc = McCrypto.newCipher(Cipher.ENCRYPT_MODE, secret)
@@ -597,7 +589,5 @@ class MinecraftClient(
     private companion object {
         // 聊天 acknowledged 字段固定 20 位（1.19.1+），序列化为 3 字节
         const val ACKNOWLEDGED_BITS = 20
-        // 登录链路运行时探针 tag（真机诊断用；上层日志走 BilicraftMC）
-        const val PROBE_TAG = "BilicraftMC-Probe"
     }
 }

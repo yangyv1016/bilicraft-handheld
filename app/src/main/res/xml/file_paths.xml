@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 更新包下载目录：应用私有 cache 下的 updates 子目录，对应 UpdateManager 的存放路径 -->
+    <cache-path
+        name="updates"
+        path="updates/" />
+</paths>

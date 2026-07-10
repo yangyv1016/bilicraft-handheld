@@ -1,6 +1,7 @@
 package com.bilicraft.handheld.config
 
 import android.content.Context
+import com.bilicraft.handheld.update.DownloadSource
 import com.bilicraft.handheld.version.McVersion
 import com.bilicraft.handheld.version.ProtocolTable
 import com.bilicraft.handheld.version.VersionType
@@ -42,7 +43,8 @@ data class QuickToolLink(
 
 @Serializable
 data class UiPreferences(
-    val chatAutoScroll: Boolean = true
+    val chatAutoScroll: Boolean = true,
+    val downloadSource: DownloadSource = DownloadSource.DEFAULT
 )
 
 /**
@@ -82,6 +84,12 @@ class UiConfigRepository(context: Context) {
 
     suspend fun setChatAutoScroll(enabled: Boolean) = withContext(Dispatchers.IO) {
         val next = _preferences.value.copy(chatAutoScroll = enabled)
+        _preferences.value = next
+        saveValue(preferencesFile, next)
+    }
+
+    suspend fun setDownloadSource(source: DownloadSource) = withContext(Dispatchers.IO) {
+        val next = _preferences.value.copy(downloadSource = source)
         _preferences.value = next
         saveValue(preferencesFile, next)
     }

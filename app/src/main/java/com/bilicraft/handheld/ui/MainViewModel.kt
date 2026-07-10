@@ -16,6 +16,10 @@ import com.bilicraft.handheld.protocol.ChatSigningMode
 import com.bilicraft.handheld.protocol.ConnectionState
 import com.bilicraft.handheld.service.ConnectionService
 import com.bilicraft.handheld.session.SessionEvent
+import com.bilicraft.handheld.update.DownloadSource
+import com.bilicraft.handheld.update.ReleaseInfo
+import com.bilicraft.handheld.update.UpdateState
+import java.io.File
 import com.bilicraft.handheld.version.McVersion
 import com.bilicraft.handheld.version.VersionRepository
 import kotlinx.coroutines.Job
@@ -48,8 +52,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val session = AppContainer.session
     private val versionRepo = AppContainer.versionRepo
     private val uiConfigRepo = AppContainer.uiConfigRepo
+    private val updateManager = AppContainer.updateManager
 
     val authState: StateFlow<AuthState> = auth.state
+    val updateState: StateFlow<UpdateState> = updateManager.state
     val accounts: StateFlow<List<AccountSummary>> = auth.accounts
     val servers: StateFlow<List<ServerConfig>> = uiConfigRepo.servers
     val quickTools: StateFlow<List<QuickToolLink>> = uiConfigRepo.tools
@@ -91,7 +97,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         get() = session.pluginManager.loadedNames()
 
     init {
-        viewModelScope.launch { uiConfigRepo.load() }
+        viewModelScope.launch {
+            uiConfigRepo.load()
+            updateManager.checkForUpdate(silent = true, source = preferences.value.downloadSource)
+        }
         viewModelScope.launch { mirrorSessionEvents() }
         viewModelScope.launch {
             if (auth.currentSession() != null) {
@@ -350,6 +359,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             "账号已移除"
         }
+    }
+
+    fun checkForUpdate() {
+        viewModelScope.launch {
+            updateManager.checkForUpdate(silent = false, source = preferences.value.downloadSource)
+        }
+    }
+
+    fun downloadUpdate(info: ReleaseInfo) {
+        viewModelScope.launch { updateManager.download(info, preferences.value.downloadSource) }
+    }
+
+    fun setDownloadSource(source: DownloadSource) {
+        viewModelScope.launch {
+            uiConfigRepo.setDownloadSource(source)
+            _uiMessage.value = "更新下载源已切换为「${source.displayName}」"
+        }
+    }
+
+    fun installUpdate(apkFile: File) {
+        updateManager.installApk(apkFile)
+    }
+
+    fun dismissUpdate() {
+        updateManager.dismiss()
     }
 
     fun openPluginLog(name: String) {

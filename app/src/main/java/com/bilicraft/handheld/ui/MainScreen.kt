@@ -2,6 +2,7 @@ package com.bilicraft.handheld.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,6 +44,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -51,6 +53,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.SnackbarHost
@@ -88,6 +91,10 @@ import com.bilicraft.handheld.config.QuickToolLink
 import com.bilicraft.handheld.config.ServerConfig
 import com.bilicraft.handheld.protocol.ChatEvent
 import com.bilicraft.handheld.protocol.ConnectionState
+import com.bilicraft.handheld.update.DownloadSource
+import com.bilicraft.handheld.update.ReleaseInfo
+import com.bilicraft.handheld.update.UpdateState
+import java.io.File
 import com.bilicraft.handheld.version.McVersion
 import com.bilicraft.handheld.version.VersionRepository
 
@@ -604,7 +611,9 @@ private fun SettingsScreen(vm: MainViewModel) {
     val pluginNames = vm.pluginNames
     val preferences by vm.preferences.collectAsStateWithLifecycle()
     val accountList by vm.accounts.collectAsStateWithLifecycle()
+    val updateState by vm.updateState.collectAsStateWithLifecycle()
     var removingAccountUuid by remember { mutableStateOf<String?>(null) }
+    var showSourcePicker by remember { mutableStateOf(false) }
 
     LazyColumn(Modifier.fillMaxSize()) {
         item { CenterAlignedTopAppBar(title = { Text("设置") }) }
@@ -705,8 +714,41 @@ private fun SettingsScreen(vm: MainViewModel) {
                 leadingContent = { Icon(Icons.Default.Info, contentDescription = null) }
             )
         }
+        item {
+            ListItem(
+                headlineContent = { Text("更新下载源") },
+                supportingContent = { Text("${preferences.downloadSource.displayName} · ${preferences.downloadSource.description}") },
+                leadingContent = { Icon(Icons.Default.Link, contentDescription = null) },
+                modifier = Modifier.clickable { showSourcePicker = true }
+            )
+        }
+        item {
+            SettingActions(
+                actions = listOf(
+                    SettingAction("检查更新", Icons.Default.Refresh, vm::checkForUpdate)
+                )
+            )
+        }
         item { Spacer(Modifier.height(24.dp)) }
     }
+
+    if (showSourcePicker) {
+        DownloadSourceDialog(
+            current = preferences.downloadSource,
+            onSelect = {
+                vm.setDownloadSource(it)
+                showSourcePicker = false
+            },
+            onDismiss = { showSourcePicker = false }
+        )
+    }
+
+    UpdateDialog(
+        state = updateState,
+        onDownload = vm::downloadUpdate,
+        onInstall = vm::installUpdate,
+        onDismiss = vm::dismissUpdate
+    )
 
     removingAccountUuid?.let { uuid ->
         val target = accountList.firstOrNull { it.uuid == uuid }
@@ -761,6 +803,132 @@ private fun AccountRow(
             onClick = { if (!account.isActive) onSwitch() },
             onLongClick = onRemove
         )
+    )
+}
+
+/**
+ * 更新对话框：按 UpdateState 渲染每个阶段。
+ * Idle 不弹窗（含启动静默自检无新版的情况）；其余状态各自呈现，操作回传给 ViewModel。
+ */
+@Composable
+private fun UpdateDialog(
+    state: UpdateState,
+    onDownload: (ReleaseInfo) -> Unit,
+    onInstall: (File) -> Unit,
+    onDismiss: () -> Unit
+) {
+    if (state is UpdateState.Idle) return
+
+    when (state) {
+        is UpdateState.Checking -> AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("检查更新") },
+            text = { Text("正在查询最新版本…") },
+            confirmButton = {}
+        )
+
+        is UpdateState.UpToDate -> AlertDialog(
+            onDismissRequest = onDismiss,
+            icon = { Icon(Icons.Default.Info, contentDescription = null) },
+            title = { Text("已是最新版本") },
+            text = { Text("当前已是最新版本，无需更新。") },
+            confirmButton = { TextButton(onClick = onDismiss) { Text("好") } }
+        )
+
+        is UpdateState.Available -> AlertDialog(
+            onDismissRequest = onDismiss,
+            icon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+            title = { Text("发现新版本 ${state.info.versionName}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (state.info.releaseNotes.isNotBlank()) {
+                        Text(state.info.releaseNotes, style = MaterialTheme.typography.bodyMedium, maxLines = 12, overflow = TextOverflow.Ellipsis)
+                    }
+                    Text(
+                        "更新前请确认：应用内更新要求新旧包签名一致，否则系统会拒绝覆盖安装。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = { TextButton(onClick = { onDownload(state.info) }) { Text("下载") } },
+            dismissButton = { TextButton(onClick = onDismiss) { Text("稍后") } }
+        )
+
+        is UpdateState.Downloading -> AlertDialog(
+            onDismissRequest = {},
+            title = { Text("正在下载 ${state.info.versionName}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (state.progress >= 0f) {
+                        LinearProgressIndicator(progress = { state.progress }, modifier = Modifier.fillMaxWidth())
+                        Text("${(state.progress * 100).toInt()}%")
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text("下载中…")
+                    }
+                }
+            },
+            confirmButton = {}
+        )
+
+        is UpdateState.Downloaded -> AlertDialog(
+            onDismissRequest = onDismiss,
+            icon = { Icon(Icons.Default.Info, contentDescription = null) },
+            title = { Text("下载完成") },
+            text = { Text("${state.info.versionName} 已下载完成，点击安装继续。若系统提示，请允许安装未知来源应用。") },
+            confirmButton = { TextButton(onClick = { onInstall(state.apkFile) }) { Text("安装") } },
+            dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+        )
+
+        is UpdateState.Failed -> AlertDialog(
+            onDismissRequest = onDismiss,
+            icon = { Icon(Icons.Default.Info, contentDescription = null) },
+            title = { Text("更新失败") },
+            text = { Text(state.reason) },
+            confirmButton = { TextButton(onClick = onDismiss) { Text("好") } }
+        )
+
+        is UpdateState.Idle -> Unit
+    }
+}
+
+/**
+ * 更新下载源选择：单选列表，选中即回传并落盘。
+ * 顺序即 DownloadSource 声明顺序（镜像在前、直连在后），呼应「优先国内镜像」。
+ */
+@Composable
+private fun DownloadSourceDialog(
+    current: DownloadSource,
+    onSelect: (DownloadSource) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.Link, contentDescription = null) },
+        title = { Text("更新下载源") },
+        text = {
+            Column {
+                DownloadSource.entries.forEach { source ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onSelect(source) }.padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = source == current, onClick = { onSelect(source) })
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text(source.displayName, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                source.description,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } }
     )
 }
 

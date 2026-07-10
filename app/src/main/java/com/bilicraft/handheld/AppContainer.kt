@@ -6,6 +6,8 @@ import com.bilicraft.handheld.auth.AuthManager
 import com.bilicraft.handheld.config.UiConfigRepository
 import com.bilicraft.handheld.session.SessionController
 import com.bilicraft.handheld.storage.SecureStore
+import com.bilicraft.handheld.update.UpdateClient
+import com.bilicraft.handheld.update.UpdateManager
 import com.bilicraft.handheld.version.VersionRepository
 
 /**
@@ -29,6 +31,8 @@ object AppContainer {
         private set
     lateinit var session: SessionController
         private set
+    lateinit var updateManager: UpdateManager
+        private set
 
     fun init(context: Context) {
         if (initialized) return
@@ -40,6 +44,11 @@ object AppContainer {
             versionRepo = VersionRepository(app)
             uiConfigRepo = UiConfigRepository(app)
             session = SessionController(authManager, versionRepo)
+            updateManager = UpdateManager(
+                appContext = app,
+                client = UpdateClient(owner = "yangyv1016", repo = "bilicraft-handheld"),
+                currentVersionName = BuildConfig.VERSION_NAME
+            )
             initialized = true
         }
     }

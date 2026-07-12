@@ -1,5 +1,8 @@
 package com.bilicraft.handheld.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -50,6 +53,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
@@ -98,6 +102,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bilicraft.handheld.appicon.AppIcon
 import com.bilicraft.handheld.config.QuickToolLink
 import com.bilicraft.handheld.config.ServerConfig
+import com.bilicraft.handheld.externalplugin.ExternalPluginEntry
+import com.bilicraft.handheld.externalplugin.ExternalPluginEntrypoint
+import com.bilicraft.handheld.externalplugin.ExternalPluginPanelHandle
+import com.bilicraft.handheld.pluginmarket.OfficialPluginMarketEntry
 import com.bilicraft.handheld.protocol.ChatEvent
 import com.bilicraft.handheld.protocol.CommandSuggestion
 import com.bilicraft.handheld.protocol.CommandSuggestionState
@@ -113,6 +121,7 @@ import com.bilicraft.handheld.version.VersionRepository
 private enum class MainTab(val title: String, val icon: ImageVector) {
     Sessions("服务器会话", Icons.Default.SportsEsports),
     Tools("快捷工具", Icons.Default.Web),
+    Plugins("插件管理", Icons.Default.Build),
     Settings("设置", Icons.Default.Settings)
 }
 
@@ -127,11 +136,23 @@ fun MainScreen(vm: MainViewModel) {
     val uiMessage by vm.uiMessage.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var selectedTab by remember { mutableStateOf(MainTab.Sessions) }
+    val activeExternalPluginPanel by vm.activeExternalPluginPanel.collectAsStateWithLifecycle()
 
     LaunchedEffect(uiMessage) {
         val message = uiMessage ?: return@LaunchedEffect
         snackbarHostState.showSnackbar(message)
         vm.consumeUiMessage()
+    }
+
+    activeExternalPluginPanel?.let { request ->
+        val handle = remember(request.pluginId, request.entrypointId) {
+            vm.externalPluginPanel(request.pluginId, request.entrypointId)
+        }
+        if (handle != null) {
+            ExternalPluginPanelScreen(handle = handle, onClose = vm::closeExternalPlugin)
+            return
+        }
+        LaunchedEffect(request) { vm.closeExternalPlugin() }
     }
 
     Scaffold(
@@ -153,6 +174,7 @@ fun MainScreen(vm: MainViewModel) {
             when (selectedTab) {
                 MainTab.Sessions -> ServerSessionsScreen(vm)
                 MainTab.Tools -> QuickToolsScreen(vm)
+                MainTab.Plugins -> PluginCenterScreen(vm)
                 MainTab.Settings -> SettingsScreen(vm)
             }
         }
@@ -197,6 +219,7 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
     val forceSigning by vm.forceSigning.collectAsStateWithLifecycle()
     val preferences by vm.preferences.collectAsStateWithLifecycle()
     val commandSuggestions by vm.commandSuggestions.collectAsStateWithLifecycle()
+    val pluginEntrypoints by vm.externalPluginEntrypoints.collectAsStateWithLifecycle()
 
     var selectedIndex by remember { mutableIntStateOf(0) }
     var editingServer by remember { mutableStateOf<ServerConfig?>(null) }
@@ -208,15 +231,6 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        ScreenHeader(
-            title = "服务器会话",
-            actions = {
-                IconButton(onClick = { showCreateDialog = true }) {
-                    Icon(Icons.Default.Add, contentDescription = "新增服务器")
-                }
-            }
-        )
-
         if (servers.isEmpty()) {
             EmptyState(
                 title = "还没有服务器配置",
@@ -225,26 +239,35 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
                 onAction = { showCreateDialog = true }
             )
         } else {
-            ScrollableTabRow(
-                selectedTabIndex = selectedIndex,
-                edgePadding = 12.dp
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                servers.forEachIndexed { index, server ->
-                    Tab(
-                        selected = selectedIndex == index,
-                        onClick = { selectedIndex = index },
-                        text = {
-                            Text(
-                                server.name,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.combinedClickable(
-                                    onClick = { selectedIndex = index },
-                                    onLongClick = { menuServer = server }
+                ScrollableTabRow(
+                    selectedTabIndex = selectedIndex,
+                    edgePadding = 0.dp,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    servers.forEachIndexed { index, server ->
+                        Tab(
+                            selected = selectedIndex == index,
+                            onClick = { selectedIndex = index },
+                            text = {
+                                Text(
+                                    server.name,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.combinedClickable(
+                                        onClick = { selectedIndex = index },
+                                        onLongClick = { menuServer = server }
+                                    )
                                 )
-                            )
-                        }
-                    )
+                            }
+                        )
+                    }
+                }
+                IconButton(onClick = { showCreateDialog = true }) {
+                    Icon(Icons.Default.Add, contentDescription = "新增服务器")
                 }
             }
 
@@ -261,11 +284,15 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
                     chatAutoScroll = preferences.chatAutoScroll,
                     commandCompletionEnabled = preferences.commandCompletionEnabled,
                     commandSuggestions = commandSuggestions,
+                    pluginEntrypoints = pluginEntrypoints,
                     onConnect = { vm.connect(selectedServer) },
                     onStop = vm::stopConnection,
                     onSend = { vm.sendChat(selectedServer.id, it) },
                     onRequestCommandSuggestions = { vm.requestCommandSuggestions(selectedServer.id, it) },
-                    onEdit = { editingServer = selectedServer }
+                    onEdit = { editingServer = selectedServer },
+                    onOpenPluginEntrypoint = { entry ->
+                        vm.openExternalPluginEntrypoint(entry.pluginId, entry.entrypointId)
+                    }
                 )
             }
         }
@@ -342,15 +369,18 @@ private fun ServerSessionPage(
     chatAutoScroll: Boolean,
     commandCompletionEnabled: Boolean,
     commandSuggestions: CommandSuggestionState,
+    pluginEntrypoints: List<ExternalPluginEntrypoint>,
     onConnect: () -> Unit,
     onStop: () -> Unit,
     onSend: (String) -> Unit,
     onRequestCommandSuggestions: (String) -> Unit,
-    onEdit: () -> Unit
+    onEdit: () -> Unit,
+    onOpenPluginEntrypoint: (ExternalPluginEntrypoint) -> Unit
 ) {
     val connected = isActiveServer && conn is ConnectionState.Connected
     val connecting = isActiveServer && conn !is ConnectionState.Disconnected && conn !is ConnectionState.Failed
     var input by remember(server.id) { mutableStateOf("") }
+    var showPluginEntrypoints by remember(server.id) { mutableStateOf(false) }
 
     LaunchedEffect(input, connected, commandCompletionEnabled) {
         if (!connected || !commandCompletionEnabled || !input.startsWith("/")) {
@@ -361,79 +391,145 @@ private fun ServerSessionPage(
         onRequestCommandSuggestions(input)
     }
 
-    Column(Modifier.fillMaxSize().padding(12.dp)) {
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-            Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(server.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        Text("${server.host}:${server.port}", style = MaterialTheme.typography.bodyMedium)
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().padding(12.dp)) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(server.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                            Text("${server.host}:${server.port}", style = MaterialTheme.typography.bodyMedium)
+                            Spacer(Modifier.height(8.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                AssistChip(onClick = {}, label = { Text(statusText(conn)) })
+                                AssistChip(onClick = {}, label = { Text(server.versionId) })
+                                if (server.signingRequired) AssistChip(onClick = {}, label = { Text("强制签名") })
+                            }
+                        }
+                        IconButton(onClick = onEdit) { Icon(Icons.Default.Edit, contentDescription = "编辑") }
                     }
-                    IconButton(onClick = onEdit) { Icon(Icons.Default.Edit, contentDescription = "编辑") }
+                    Spacer(Modifier.height(12.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = onConnect, enabled = !connecting, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Default.SportsEsports, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("连接")
+                        }
+                        OutlinedButton(onClick = onStop, enabled = isActiveServer, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Default.Stop, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("断开")
+                        }
+                    }
                 }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            key(server.id) {
+                ChatLog(log = log, autoScroll = chatAutoScroll, modifier = Modifier.weight(1f).fillMaxWidth())
+            }
+            val visibleSuggestions = commandSuggestions.takeIf {
+                connected && commandCompletionEnabled && it.requestInput == input && it.hasSuggestions
+            }
+            if (visibleSuggestions != null) {
                 Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AssistChip(onClick = {}, label = { Text(statusText(conn)) })
-                    AssistChip(onClick = {}, label = { Text(server.versionId) })
-                    if (server.signingRequired) AssistChip(onClick = {}, label = { Text("强制签名") })
-                }
-                Spacer(Modifier.height(12.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onConnect, enabled = !connecting, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Default.SportsEsports, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("连接")
+                CommandSuggestionBar(
+                    state = visibleSuggestions,
+                    onSelect = { suggestion ->
+                        input = CommandSuggestions.apply(input, visibleSuggestions.start, visibleSuggestions.length, suggestion.text)
                     }
-                    OutlinedButton(onClick = onStop, enabled = isActiveServer, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Default.Stop, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("断开")
-                    }
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    label = { Text("发送聊天…") },
+                    singleLine = true,
+                    enabled = connected,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = { onSend(input); input = ""; onRequestCommandSuggestions("") },
+                    enabled = connected && input.isNotBlank()
+                ) {
+                    Icon(Icons.Default.Send, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("发送")
                 }
             }
         }
 
-        Spacer(Modifier.height(12.dp))
-        key(server.id) {
-            ChatLog(log = log, autoScroll = chatAutoScroll, modifier = Modifier.weight(1f).fillMaxWidth())
-        }
-        val visibleSuggestions = commandSuggestions.takeIf {
-            connected && commandCompletionEnabled && it.requestInput == input && it.hasSuggestions
-        }
-        if (visibleSuggestions != null) {
-            Spacer(Modifier.height(8.dp))
-            CommandSuggestionBar(
-                state = visibleSuggestions,
-                onSelect = { suggestion ->
-                    input = CommandSuggestions.apply(input, visibleSuggestions.start, visibleSuggestions.length, suggestion.text)
-                }
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
-                label = { Text("发送聊天…") },
-                singleLine = true,
-                enabled = connected,
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = { onSend(input); input = ""; onRequestCommandSuggestions("") },
-                enabled = connected && input.isNotBlank()
-            ) {
-                Icon(Icons.Default.Send, contentDescription = null)
-                Spacer(Modifier.width(6.dp))
-                Text("发送")
-            }
+        FloatingActionButton(
+            onClick = { showPluginEntrypoints = true },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 20.dp, bottom = 88.dp)
+        ) {
+            Icon(Icons.Default.Build, contentDescription = "插件入口")
         }
     }
+
+    if (showPluginEntrypoints) {
+        PluginEntrypointPickerDialog(
+            entrypoints = pluginEntrypoints,
+            onOpen = { entry ->
+                showPluginEntrypoints = false
+                onOpenPluginEntrypoint(entry)
+            },
+            onDismiss = { showPluginEntrypoints = false }
+        )
+    }
+}
+
+@Composable
+private fun PluginEntrypointPickerDialog(
+    entrypoints: List<ExternalPluginEntrypoint>,
+    onOpen: (ExternalPluginEntrypoint) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("插件入口") },
+        text = {
+            if (entrypoints.isEmpty()) {
+                Text("当前没有可用插件入口。请先在“插件管理”中安装并启用插件。")
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    entrypoints.forEach { entry ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onOpen(entry) },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        ) {
+                            Text(
+                                text = entry.pluginName,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
 }
 
 @Composable
@@ -569,16 +665,6 @@ private fun QuickToolsScreen(vm: MainViewModel) {
     var editingTool by remember { mutableStateOf<QuickToolLink?>(null) }
 
     Scaffold(
-        topBar = {
-            ScreenHeader(
-                title = "快捷工具",
-                actions = {
-                    IconButton(onClick = { showEditor = true }) {
-                        Icon(Icons.Default.Add, contentDescription = "新增快捷工具")
-                    }
-                }
-            )
-        },
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { showEditor = true },
@@ -700,7 +786,6 @@ private fun ToolEditorDialog(
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun SettingsScreen(vm: MainViewModel) {
-    val pluginNames = vm.pluginNames
     val preferences by vm.preferences.collectAsStateWithLifecycle()
     val accountList by vm.accounts.collectAsStateWithLifecycle()
     val updateState by vm.updateState.collectAsStateWithLifecycle()
@@ -720,8 +805,6 @@ private fun SettingsScreen(vm: MainViewModel) {
     }
 
     LazyColumn(Modifier.fillMaxSize()) {
-        item { ScreenHeader(title = "设置") }
-
         item { SectionTitle("账号管理") }
         val accounts = accountList
         if (accounts.isEmpty()) {
@@ -787,40 +870,6 @@ private fun SettingsScreen(vm: MainViewModel) {
                 trailingContent = { Icon(Icons.Default.ChevronRight, contentDescription = null) },
                 modifier = Modifier.clickable { showIconPicker = true }
             )
-        }
-
-        item { SectionTitle("插件功能") }
-        if (pluginNames.isEmpty()) {
-            item {
-                Text(
-                    "插件功能暂未开启",
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        } else {
-            items(pluginNames) { name ->
-                var enabled by remember(name) { mutableStateOf(true) }
-                ListItem(
-                    headlineContent = { Text(name) },
-                    supportingContent = { Text("内置插件生命周期由现有 PluginManager 管理。") },
-                    leadingContent = { Icon(Icons.Default.Build, contentDescription = null) },
-                    trailingContent = {
-                        Switch(
-                            checked = enabled,
-                            onCheckedChange = {
-                                enabled = it
-                                vm.setPluginEnabled(name, it)
-                            }
-                        )
-                    },
-                    modifier = Modifier.combinedClickable(
-                        onClick = { vm.openPluginLog(name) },
-                        onLongClick = { vm.openPluginLog(name) }
-                    )
-                )
-                HorizontalDivider()
-            }
         }
 
         item { SectionTitle("版本数据") }
@@ -895,6 +944,218 @@ private fun SettingsScreen(vm: MainViewModel) {
             }
         )
     }
+}
+
+@Composable
+private fun PluginCenterScreen(vm: MainViewModel) {
+    val officialMarket by vm.officialMarket.collectAsStateWithLifecycle()
+    val externalPlugins by vm.externalPlugins.collectAsStateWithLifecycle()
+    val pluginImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.importExternalPlugin(uri)
+    }
+
+    LazyColumn(Modifier.fillMaxSize()) {
+        item { SectionTitle("已安装插件") }
+        item {
+            ListItem(
+                headlineContent = { Text("插件目录") },
+                supportingContent = { Text(vm.pluginDropDirText) },
+                leadingContent = { Icon(Icons.Default.Build, contentDescription = null) }
+            )
+        }
+        item {
+            SettingActions(
+                actions = listOf(
+                    SettingAction("导入插件包", Icons.Default.Add) {
+                        pluginImportLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
+                    },
+                    SettingAction("重新扫描", Icons.Default.Refresh, vm::refreshExternalPlugins)
+                )
+            )
+        }
+        if (externalPlugins.isEmpty()) {
+            item {
+                Text(
+                    "把 .bhplugin 文件放入上方目录，或点击“导入插件包”选择外部文件。",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            items(externalPlugins, key = { "installed-${it.id}" }) { plugin ->
+                ExternalPluginRow(
+                    plugin = plugin,
+                    onEnabledChange = { enabled -> vm.setExternalPluginEnabled(plugin.id, enabled) },
+                    onRemove = { vm.uninstallExternalPlugin(plugin.id) }
+                )
+                HorizontalDivider()
+            }
+        }
+
+        item { SectionTitle("官方插件市场") }
+        item {
+            OfficialPluginMarketHeader(
+                sourceUrl = officialMarket.sourceUrl,
+                updatedAt = officialMarket.updatedAt,
+                loading = officialMarket.loading,
+                errorMessage = officialMarket.errorMessage,
+                onRefresh = vm::refreshOfficialPluginMarket
+            )
+        }
+        if (officialMarket.entries.isEmpty() && !officialMarket.loading) {
+            item {
+                Text(
+                    "官方源暂无可展示插件。刷新失败时会保留本地缓存。",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            items(officialMarket.entries, key = { "market-${it.id}" }) { entry ->
+                OfficialPluginMarketRow(
+                    entry = entry,
+                    onInstall = { vm.installOfficialPlugin(entry.id) }
+                )
+                HorizontalDivider()
+            }
+        }
+
+        item { Spacer(Modifier.height(24.dp)) }
+    }
+}
+
+@Composable
+private fun OfficialPluginMarketHeader(
+    sourceUrl: String,
+    updatedAt: String?,
+    loading: Boolean,
+    errorMessage: String?,
+    onRefresh: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("官方源", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        sourceUrl,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                IconButton(onClick = onRefresh, enabled = !loading) {
+                    Icon(Icons.Default.Refresh, contentDescription = "刷新官方插件源")
+                }
+            }
+            updatedAt?.takeIf { it.isNotBlank() }?.let {
+                Text("索引更新时间：$it", style = MaterialTheme.typography.bodySmall)
+            }
+            if (loading) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            errorMessage?.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
+}
+
+@Composable
+private fun OfficialPluginMarketRow(
+    entry: OfficialPluginMarketEntry,
+    onInstall: () -> Unit
+) {
+    val actionText = when {
+        !entry.compatible -> "不兼容"
+        entry.updateAvailable -> "更新"
+        entry.installed -> "已安装"
+        else -> "安装"
+    }
+    val detail = buildList {
+        add("最新 ${entry.latestVersion}" + (entry.installedVersion?.let { " · 已装 $it" } ?: ""))
+        entry.author.takeIf { it.isNotBlank() }?.let { add("作者：$it") }
+        entry.summary.takeIf { it.isNotBlank() }?.let { add(it) }
+        entry.description.takeIf { it.isNotBlank() && it != entry.summary }?.let { add(it) }
+        entry.downloadSize?.let { add("大小：${formatPluginPackageSize(it)}") }
+        if (entry.permissions.isNotEmpty()) add("权限：${entry.permissions.joinToString()}")
+        entry.changelog.takeIf { it.isNotBlank() }?.let { add("更新：$it") }
+    }.joinToString("\n")
+
+    ListItem(
+        headlineContent = { Text(entry.name, fontWeight = FontWeight.SemiBold) },
+        supportingContent = {
+            Text(
+                detail,
+                maxLines = 8,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        leadingContent = { Icon(Icons.Default.Build, contentDescription = null) },
+        trailingContent = {
+            Button(
+                onClick = onInstall,
+                enabled = entry.compatible && (!entry.installed || entry.updateAvailable)
+            ) {
+                Text(actionText)
+            }
+        }
+    )
+}
+
+private fun formatPluginPackageSize(size: Long): String = when {
+    size >= 1024L * 1024L -> "%.1f MB".format(size / 1024f / 1024f)
+    size >= 1024L -> "%.1f KB".format(size / 1024f)
+    else -> "$size B"
+}
+@Composable
+private fun ExternalPluginPanelScreen(
+    handle: ExternalPluginPanelHandle,
+    onClose: () -> Unit
+) {
+    BackHandler(onBack = onClose)
+    Box(Modifier.fillMaxSize()) {
+        handle.panel.Content(host = handle.host, onClose = onClose)
+    }
+}
+
+@Composable
+private fun ExternalPluginRow(
+    plugin: ExternalPluginEntry,
+    onEnabledChange: (Boolean) -> Unit,
+    onRemove: () -> Unit
+) {
+    val status = when {
+        !plugin.enabled -> "已禁用"
+        plugin.loaded -> "已启用"
+        else -> "加载失败"
+    }
+    ListItem(
+        headlineContent = { Text(plugin.name) },
+        supportingContent = {
+            Text(
+                listOfNotNull(
+                    "$status · ${plugin.version}",
+                    plugin.description.takeIf { it.isNotBlank() },
+                    plugin.statusMessage
+                ).joinToString("\n")
+            )
+        },
+        leadingContent = { Icon(Icons.Default.Build, contentDescription = null) },
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = plugin.enabled,
+                    onCheckedChange = onEnabledChange
+                )
+                IconButton(onClick = onRemove) {
+                    Icon(Icons.Default.Delete, contentDescription = "移除外部插件")
+                }
+            }
+        }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)

@@ -1,6 +1,7 @@
 package com.bilicraft.handheld.ui
 
 import android.app.Application
+import android.net.Uri
 import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -13,6 +14,10 @@ import com.bilicraft.handheld.auth.AuthState
 import com.bilicraft.handheld.config.QuickToolLink
 import com.bilicraft.handheld.config.ServerConfig
 import com.bilicraft.handheld.config.UiPreferences
+import com.bilicraft.handheld.externalplugin.ExternalPluginEntry
+import com.bilicraft.handheld.externalplugin.ExternalPluginEntrypoint
+import com.bilicraft.handheld.externalplugin.ExternalPluginPanelHandle
+import com.bilicraft.handheld.pluginmarket.OfficialPluginMarketState
 import com.bilicraft.handheld.protocol.ChatEvent
 import com.bilicraft.handheld.protocol.ChatSigningMode
 import com.bilicraft.handheld.protocol.CommandSuggestionState
@@ -26,12 +31,14 @@ import com.bilicraft.handheld.update.UpdateState
 import java.io.File
 import com.bilicraft.handheld.version.McVersion
 import com.bilicraft.handheld.version.VersionRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 单会话连接在多服务器 Tab 上的 UI 投影。
@@ -41,6 +48,11 @@ data class ServerRuntimeUiState(
     val activeServerId: String? = null,
     val connectionStates: Map<String, ConnectionState> = emptyMap(),
     val chatLogs: Map<String, List<ChatEvent>> = emptyMap()
+)
+
+data class ActiveExternalPluginPanel(
+    val pluginId: String,
+    val entrypointId: String
 )
 
 /**
@@ -58,6 +70,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val uiConfigRepo = AppContainer.uiConfigRepo
     private val updateManager = AppContainer.updateManager
     private val appIconManager = AppContainer.appIconManager
+    private val externalPluginManager = AppContainer.externalPluginManager
+    private val officialPluginMarket = AppContainer.officialPluginMarket
 
     val authState: StateFlow<AuthState> = auth.state
     val updateState: StateFlow<UpdateState> = updateManager.state
@@ -65,6 +79,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val servers: StateFlow<List<ServerConfig>> = uiConfigRepo.servers
     val quickTools: StateFlow<List<QuickToolLink>> = uiConfigRepo.tools
     val preferences: StateFlow<UiPreferences> = uiConfigRepo.preferences
+    val externalPlugins: StateFlow<List<ExternalPluginEntry>> = externalPluginManager.entries
+    val externalPluginEntrypoints: StateFlow<List<ExternalPluginEntrypoint>> = externalPluginManager.entrypoints
+    val officialMarket: StateFlow<OfficialPluginMarketState> = officialPluginMarket.state
 
     private val _serverRuntime = MutableStateFlow(ServerRuntimeUiState())
     val serverRuntime: StateFlow<ServerRuntimeUiState> = _serverRuntime.asStateFlow()
@@ -94,6 +111,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _currentAppIcon = MutableStateFlow(appIconManager.current())
     val currentAppIcon: StateFlow<AppIcon> = _currentAppIcon.asStateFlow()
 
+    private val _activeExternalPluginPanel = MutableStateFlow<ActiveExternalPluginPanel?>(null)
+    val activeExternalPluginPanel: StateFlow<ActiveExternalPluginPanel?> = _activeExternalPluginPanel.asStateFlow()
+
     private var loginJob: Job? = null
 
     val currentAccountName: String
@@ -105,13 +125,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val versionNameText: String
         get() = BuildConfig.VERSION_NAME
 
-    val pluginNames: List<String>
-        get() = session.pluginManager.loadedNames()
+    val pluginDropDirText: String
+        get() = externalPluginManager.pluginDropDir.absolutePath
 
     init {
         viewModelScope.launch {
             uiConfigRepo.load()
             updateManager.checkForUpdate(silent = true, source = preferences.value.downloadSource)
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            externalPluginManager.refresh()
+            officialPluginMarket.loadCache()
+            officialPluginMarket.syncInstalledState()
+            officialPluginMarket.refresh()
         }
         viewModelScope.launch { mirrorSessionEvents() }
         viewModelScope.launch { mirrorCommandSuggestions() }
@@ -439,15 +465,98 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         updateManager.dismiss()
     }
 
-    fun openPluginLog(name: String) {
-        _uiMessage.value = "$name 的运行日志已输出到连接日志"
+    fun refreshOfficialPluginMarket() {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { officialPluginMarket.refresh() }
+            _uiMessage.value = result.fold(
+                onSuccess = { "官方插件源已刷新，共 $it 个插件" },
+                onFailure = { "官方插件源刷新失败：${it.message ?: "未知错误"}" }
+            )
+        }
     }
 
-    fun setPluginEnabled(name: String, enabled: Boolean) {
-        _uiMessage.value = if (enabled) {
-            "$name 是内置插件，已随会话加载"
-        } else {
-            "$name 是内置插件，当前不提供 UI 禁用接口"
+    fun installOfficialPlugin(pluginId: String) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { officialPluginMarket.install(pluginId) }
+            _uiMessage.value = result.fold(
+                onSuccess = { "官方插件已安装：${it.name}" },
+                onFailure = { "官方插件安装失败：${it.message ?: "未知错误"}" }
+            )
+        }
+    }
+
+    fun refreshExternalPlugins() {
+        viewModelScope.launch {
+            val imported = withContext(Dispatchers.IO) { externalPluginManager.refresh() }
+            officialPluginMarket.syncInstalledState()
+            _uiMessage.value = if (imported > 0) {
+                "已导入 $imported 个外部插件包"
+            } else {
+                "外部插件目录已重新扫描"
+            }
+        }
+    }
+
+    fun importExternalPlugin(uri: Uri) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val resolver = getApplication<Application>().contentResolver
+                    val importDir = File(getApplication<Application>().cacheDir, "plugin-imports").apply { mkdirs() }
+                    val temp = File(importDir, "import-${System.currentTimeMillis()}.bhplugin")
+                    resolver.openInputStream(uri)?.use { input ->
+                        temp.outputStream().use { output -> input.copyTo(output) }
+                    } ?: error("无法读取插件文件")
+                    externalPluginManager.installPackage(temp).getOrThrow().also {
+                        officialPluginMarket.syncInstalledState()
+                    }
+                }
+            }
+            _uiMessage.value = result.fold(
+                onSuccess = { "外部插件已加载：${it.name}" },
+                onFailure = { "外部插件加载失败：${it.message ?: "未知错误"}" }
+            )
+        }
+    }
+
+    fun openExternalPluginEntrypoint(pluginId: String, entrypointId: String) {
+        val entry = externalPluginEntrypoints.value.firstOrNull {
+            it.pluginId == pluginId && it.entrypointId == entrypointId
+        }
+        if (entry == null) {
+            _uiMessage.value = "插件入口不可用，请确认插件已启用"
+            return
+        }
+        _activeExternalPluginPanel.value = ActiveExternalPluginPanel(pluginId, entrypointId)
+    }
+
+    fun closeExternalPlugin() {
+        _activeExternalPluginPanel.value = null
+    }
+
+    fun externalPluginPanel(pluginId: String, entrypointId: String): ExternalPluginPanelHandle? =
+        externalPluginManager.panel(pluginId, entrypointId)
+
+    fun setExternalPluginEnabled(pluginId: String, enabled: Boolean) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { externalPluginManager.setEnabled(pluginId, enabled) }
+            officialPluginMarket.syncInstalledState()
+            if (!enabled && _activeExternalPluginPanel.value?.pluginId == pluginId) {
+                _activeExternalPluginPanel.value = null
+            }
+            _uiMessage.value = result.fold(
+                onSuccess = { if (enabled) "插件已启用：${it.name}" else "插件已禁用：${it.name}" },
+                onFailure = { "插件启停失败：${it.message ?: "未知错误"}" }
+            )
+        }
+    }
+
+    fun uninstallExternalPlugin(pluginId: String) {
+        viewModelScope.launch {
+            val removed = withContext(Dispatchers.IO) { externalPluginManager.uninstall(pluginId) }
+            officialPluginMarket.syncInstalledState()
+            if (_activeExternalPluginPanel.value?.pluginId == pluginId) _activeExternalPluginPanel.value = null
+            _uiMessage.value = if (removed) "外部插件已移除" else "外部插件已卸载"
         }
     }
 

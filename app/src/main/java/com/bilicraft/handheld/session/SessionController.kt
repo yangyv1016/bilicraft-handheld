@@ -134,6 +134,10 @@ class SessionController(
         client?.requestCommandSuggestions(input)
     }
 
+    fun appendPluginLog(pluginId: String, message: String) {
+        appendSystem("[外部插件:$pluginId] $message")
+    }
+
     // ---- 内部编排 ----
 
     private suspend fun connectOnce(request: ConnectionRequest, attempt: Int) {

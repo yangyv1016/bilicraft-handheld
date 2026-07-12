@@ -1,0 +1,65 @@
+{
+  // 索引格式版本。当前 App 识别版本 1；未来如果索引结构不兼容再递增。
+  "schemaVersion": 1,
+
+  // 索引更新时间。建议使用 ISO-8601 UTC 时间，方便用户和审核者判断市场数据是否新鲜。
+  "updatedAt": "2026-07-12T00:00:00Z",
+
+  // 官方插件列表。正式 index.json 只放已经发布、可下载、可校验的插件。
+  "plugins": [
+    {
+      // 插件唯一 ID。必须和 .bhplugin 包内 plugin.json 的 id 完全一致。
+      "id": "com.example.bhplugin.demo",
+
+      // 插件在 App 官方市场里展示的名称。
+      "name": "示例插件",
+
+      // 插件列表页短描述，尽量一行说清用途。
+      "summary": "用于演示官方源索引字段的占位插件。",
+
+      // 插件详情描述。可以比 summary 更完整，但不要写安装步骤这类无关内容。
+      "description": "这是索引格式示例。提交正式 PR 时，downloadUrl 必须指向真实 .bhplugin，sha256 必须来自最终上传文件。",
+
+      // 插件源码仓库、主页或发布页。可选，但建议填写，方便审核和溯源。
+      "repo": "https://github.com/example/bhplugin-demo",
+
+      // 插件作者或维护者名称。
+      "author": "Example Developer",
+
+      // 插件分类。当前 App 只展示文本，建议使用 tools/gameplay/chat/utility/example 等稳定小写值。
+      "category": "example",
+
+      // 官方市场展示的最新版本。必须能在 releases 里找到同版本条目。
+      "latestVersion": "1.0.0",
+
+      // 最低 App 版本。为空表示不限制；填写后低版本 App 会显示为不兼容。
+      "minAppVersion": "0.1.9",
+
+      // 插件需要的最低插件 API 版本。不能高于当前 App 支持的 BH_PLUGIN_API_VERSION。
+      "minApiVersion": 1,
+
+      // 插件声明权限白名单。.bhplugin 内 plugin.json 的 permissions 不能超出这里。
+      "permissions": ["network"],
+
+      // 插件发布版本列表。至少要包含 latestVersion 对应的版本。
+      "releases": [
+        {
+          // 发布版本。必须和 .bhplugin 包内 plugin.json 的 version 完全一致。
+          "version": "1.0.0",
+
+          // .bhplugin 的稳定下载地址，通常是 GitHub Releases asset。
+          "downloadUrl": "https://github.com/example/bhplugin-demo/releases/download/v1.0.0/demo-1.0.0.bhplugin",
+
+          // 最终上传的 .bhplugin 文件 SHA-256。必须用 printBhPluginSha256 或等价命令计算最终文件。
+          "sha256": "replace-with-final-bhplugin-sha256",
+
+          // .bhplugin 文件大小，单位字节。可选，用于市场页展示下载体积。
+          "size": 123456,
+
+          // 该版本更新说明。安装/更新按钮旁会展示摘要。
+          "changelog": "首次发布示例插件。"
+        }
+      ]
+    }
+  ]
+}

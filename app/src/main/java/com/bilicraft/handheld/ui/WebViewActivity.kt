@@ -4,8 +4,10 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.os.Build
 import android.os.Bundle
 import android.view.ViewGroup
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -13,11 +15,17 @@ import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.annotation.RequiresApi
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -29,9 +37,12 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 
 /**
@@ -40,9 +51,11 @@ import androidx.compose.ui.viewinterop.AndroidView
  */
 class WebViewActivity : ComponentActivity() {
     private var webView: WebView? = null
+    private var pendingWebViewState: Bundle? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pendingWebViewState = savedInstanceState?.getBundle(KEY_WEBVIEW_STATE)
         val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "快捷工具" }
         val url = intent.getStringExtra(EXTRA_URL).orEmpty()
 
@@ -53,13 +66,42 @@ class WebViewActivity : ComponentActivity() {
                         title = title,
                         url = url,
                         onClose = { finish() },
-                        createWebView = { progress ->
-                            buildWebView(url = url, onProgress = progress).also { webView = it }
+                        createWebView = { progress, onRendererGone ->
+                            buildWebView(
+                                url = url,
+                                savedState = pendingWebViewState,
+                                onProgress = progress,
+                                onRendererGone = onRendererGone
+                            ).also {
+                                webView = it
+                                pendingWebViewState = null
+                            }
                         }
                     )
                 }
             }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        webView?.let { current ->
+            val webViewState = Bundle()
+            current.saveState(webViewState)
+            outState.putBundle(KEY_WEBVIEW_STATE, webViewState)
+        }
+        super.onSaveInstanceState(outState)
+    }
+
+    override fun onPause() {
+        webView?.onPause()
+        webView?.pauseTimers()
+        super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        webView?.resumeTimers()
+        webView?.onResume()
     }
 
     override fun onDestroy() {
@@ -74,7 +116,12 @@ class WebViewActivity : ComponentActivity() {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun buildWebView(url: String, onProgress: (Int) -> Unit): WebView = WebView(this).apply {
+    private fun buildWebView(
+        url: String,
+        savedState: Bundle?,
+        onProgress: (Int) -> Unit,
+        onRendererGone: () -> Unit
+    ): WebView = WebView(this).apply {
         layoutParams = ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
@@ -93,17 +140,35 @@ class WebViewActivity : ComponentActivity() {
                 onProgress(0)
             }
 
+            @Suppress("DEPRECATION")
+            override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                val target = url?.takeIf { it.isNotBlank() } ?: return false
+                view?.loadUrl(target) ?: return false
+                return true
+            }
+
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 view.loadUrl(request.url.toString())
                 return true
             }
+
+            @RequiresApi(Build.VERSION_CODES.O)
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                onProgress(100)
+                (view.parent as? ViewGroup)?.removeView(view)
+                if (webView === view) webView = null
+                view.destroy()
+                onRendererGone()
+                return true
+            }
         }
-        if (url.isNotBlank()) loadUrl(url)
+        if (savedState != null) restoreState(savedState) else if (url.isNotBlank()) loadUrl(url)
     }
 
     companion object {
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_URL = "url"
+        private const val KEY_WEBVIEW_STATE = "webview_state"
 
         fun intent(context: Context, title: String, url: String): Intent =
             Intent(context, WebViewActivity::class.java)
@@ -118,13 +183,20 @@ private fun WebToolPage(
     title: String,
     url: String,
     onClose: () -> Unit,
-    createWebView: ((Int) -> Unit) -> WebView
+    createWebView: ((Int) -> Unit, () -> Unit) -> WebView
 ) {
     var progress by remember { mutableIntStateOf(0) }
-    val webView = remember(url) { createWebView { progress = it } }
+    var rendererGone by remember { mutableStateOf(false) }
+    var webViewKey by remember { mutableIntStateOf(0) }
+    val webView = remember(url, webViewKey) {
+        createWebView(
+            { progress = it },
+            { rendererGone = true }
+        )
+    }
 
     BackHandler(enabled = true) {
-        if (webView.canGoBack()) webView.goBack() else onClose()
+        if (!rendererGone && webView.canGoBack()) webView.goBack() else onClose()
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -136,14 +208,34 @@ private fun WebToolPage(
                 }
             }
         )
-        if (progress in 0..99) {
+        if (!rendererGone && progress in 0..99) {
             LinearProgressIndicator(progress = { progress / 100f })
         }
         Box(Modifier.fillMaxSize()) {
-            AndroidView(
-                factory = { webView },
-                modifier = Modifier.fillMaxSize()
-            )
+            if (rendererGone) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("网页渲染进程已被系统回收，页面没有崩溃。")
+                    Spacer(Modifier.height(12.dp))
+                    Button(onClick = {
+                        rendererGone = false
+                        progress = 0
+                        webViewKey += 1
+                    }) {
+                        Text("重新加载")
+                    }
+                }
+            } else {
+                AndroidView(
+                    factory = { webView },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
         }
     }
 }

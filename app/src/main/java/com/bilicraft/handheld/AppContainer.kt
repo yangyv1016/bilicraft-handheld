@@ -5,6 +5,8 @@ import com.bilicraft.handheld.appicon.AppIconManager
 import com.bilicraft.handheld.auth.AuthClient
 import com.bilicraft.handheld.auth.AuthManager
 import com.bilicraft.handheld.config.UiConfigRepository
+import com.bilicraft.handheld.externalplugin.ExternalPluginManager
+import com.bilicraft.handheld.pluginmarket.OfficialPluginMarketRepository
 import com.bilicraft.handheld.protocol.MinecraftTranslations
 import com.bilicraft.handheld.session.SessionController
 import com.bilicraft.handheld.storage.SecureStore
@@ -37,6 +39,10 @@ object AppContainer {
         private set
     lateinit var appIconManager: AppIconManager
         private set
+    lateinit var externalPluginManager: ExternalPluginManager
+        private set
+    lateinit var officialPluginMarket: OfficialPluginMarketRepository
+        private set
 
     fun init(context: Context) {
         if (initialized) return
@@ -57,6 +63,8 @@ object AppContainer {
                 currentVersionName = BuildConfig.VERSION_NAME
             )
             appIconManager = AppIconManager(app)
+            externalPluginManager = ExternalPluginManager(app, session)
+            officialPluginMarket = OfficialPluginMarketRepository(app, externalPluginManager)
             initialized = true
         }
     }

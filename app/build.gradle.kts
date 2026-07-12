@@ -201,6 +201,8 @@ val syncAppIcons by tasks.registering {
 tasks.named("preBuild") { dependsOn(syncAppIcons) }
 
 dependencies {
+    implementation(project(":plugin-api"))
+
     // Compose
     val composeBom = platform("androidx.compose:compose-bom:2024.09.03")
     implementation(composeBom)

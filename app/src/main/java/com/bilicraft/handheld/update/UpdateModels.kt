@@ -13,10 +13,10 @@ import java.io.File
  * 设计：源的差异只体现在「如何把一个 github.com / api.github.com 的原始 URL 变成实际请求 URL」，
  * 因此每个源就是一个纯变换 rewrite()：
  * - DIRECT 原样返回（直连 GitHub）
- * - 其余镜像给原始 URL 加代理前缀（gh-proxy 系公共代理，API 查询与 APK 下载统一走同一前缀）
+ * - 其余镜像给原始 URL 加代理前缀（公共镜像或项目自建 Cloudflare 代理，API 查询与 APK 下载统一走同一前缀）
  *
- * 为什么统一改写 API 与下载：用户选镜像的前提就是直连不稳，gh-proxy 系代理对
- * api.github.com/repos/.../releases 与 github.com/.../releases/download 都支持，
+ * 为什么统一改写 API 与下载：用户选镜像的前提就是直连不稳，代理源需要同时支持
+ * api.github.com/repos/.../releases 与 github.com/.../releases/download，
  * 二者用同一前缀即可，避免出现「能查到新版却下不动」的割裂状态。
  *
  * 默认优先国内镜像（本项目面向国内用户，直连 GitHub 常超时）。
@@ -27,6 +27,7 @@ enum class DownloadSource(
     val description: String,
     private val prefix: String
 ) {
+    CLOUDFLARE("镜像 · Cloudflare", "通过 bccdn.yanguiofficial.cn 加速", "https://bccdn.yanguiofficial.cn/"),
     GH_PROXY("镜像 · gh-proxy", "国内推荐，通过 gh-proxy.com 加速", "https://gh-proxy.com/"),
     GHPROXY_NET("镜像 · ghproxy.net", "备用镜像，gh-proxy.com 不通时可切换", "https://ghproxy.net/"),
     MIRROR_GHPROXY("镜像 · mirror.ghproxy", "备用镜像，通过 mirror.ghproxy.com 加速", "https://mirror.ghproxy.com/"),
@@ -37,8 +38,8 @@ enum class DownloadSource(
         if (prefix.isEmpty()) githubUrl else prefix + githubUrl
 
     companion object {
-        /** 默认源：优先国内镜像 */
-        val DEFAULT = GH_PROXY
+        /** 默认源：优先使用项目自建 Cloudflare 代理 */
+        val DEFAULT = CLOUDFLARE
     }
 }
 

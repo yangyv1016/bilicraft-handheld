@@ -236,6 +236,6 @@ class OfficialPluginMarketRepository(
     }
 
     companion object {
-        const val DEFAULT_INDEX_URL = "https://raw.githubusercontent.com/yangyv1016/bilicraft-handheld/main/plugin-market/index.json"
+        const val DEFAULT_INDEX_URL = "https://bccdn.yanguiofficial.cn/plugin-market/index.json"
     }
 }

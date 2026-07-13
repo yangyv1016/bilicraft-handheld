@@ -1,0 +1,43 @@
+name: Deploy CDN
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_run:
+    workflows: ['Release']
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cdn
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy Cloudflare Pages CDN
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build CDN files
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CDN_ROOT: https://bccdn.yanguiofficial.cn
+        run: node scripts/build-cdn.mjs
+
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler@latest pages deploy cdn-dist --project-name=bilicraft-cdn --branch=main

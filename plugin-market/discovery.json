@@ -5,7 +5,7 @@
       "pluginId": "stock-market-dashboard",
       "owner": "ShadowYinb",
       "repo": "Bilicraft-Handheld-Stocks",
-      "releaseAsset": "market-entry.json",
+      "releaseAsset": "official-market-entry.json",
       "allowedPermissions": [
         "network"
       ],

@@ -72,6 +72,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val appIconManager = AppContainer.appIconManager
     private val externalPluginManager = AppContainer.externalPluginManager
     private val officialPluginMarket = AppContainer.officialPluginMarket
+    private val cdkRepository = AppContainer.cdkRepository
 
     val authState: StateFlow<AuthState> = auth.state
     val updateState: StateFlow<UpdateState> = updateManager.state
@@ -82,6 +83,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val externalPlugins: StateFlow<List<ExternalPluginEntry>> = externalPluginManager.entries
     val externalPluginEntrypoints: StateFlow<List<ExternalPluginEntrypoint>> = externalPluginManager.entrypoints
     val officialMarket: StateFlow<OfficialPluginMarketState> = officialPluginMarket.state
+    val cdkState = cdkRepository.state
 
     private val _serverRuntime = MutableStateFlow(ServerRuntimeUiState())
     val serverRuntime: StateFlow<ServerRuntimeUiState> = _serverRuntime.asStateFlow()
@@ -138,6 +140,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             officialPluginMarket.loadCache()
             officialPluginMarket.syncInstalledState()
             officialPluginMarket.refresh()
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            cdkRepository.loadCache()
+            cdkRepository.refresh()
         }
         viewModelScope.launch { mirrorSessionEvents() }
         viewModelScope.launch { mirrorCommandSuggestions() }
@@ -473,6 +479,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 onFailure = { "官方插件源刷新失败：${it.message ?: "未知错误"}" }
             )
         }
+    }
+
+    fun refreshCdk() {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { cdkRepository.refresh() }
+            _uiMessage.value = result.fold(
+                onSuccess = { count -> if (count > 0) "CDK 已刷新，当前可显示 $count 个" else "CDK 已刷新，当前没有可显示内容" },
+                onFailure = { "CDK 刷新失败：${it.message ?: "未知错误"}" }
+            )
+        }
+    }
+
+    fun refreshCdkActiveWindow() {
+        cdkRepository.refreshActiveWindow()
     }
 
     fun installOfficialPlugin(pluginId: String) {

@@ -4,6 +4,7 @@ import android.content.Context
 import com.bilicraft.handheld.appicon.AppIconManager
 import com.bilicraft.handheld.auth.AuthClient
 import com.bilicraft.handheld.auth.AuthManager
+import com.bilicraft.handheld.cdk.CdkRepository
 import com.bilicraft.handheld.config.UiConfigRepository
 import com.bilicraft.handheld.externalplugin.ExternalPluginManager
 import com.bilicraft.handheld.pluginmarket.OfficialPluginMarketRepository
@@ -43,6 +44,8 @@ object AppContainer {
         private set
     lateinit var officialPluginMarket: OfficialPluginMarketRepository
         private set
+    lateinit var cdkRepository: CdkRepository
+        private set
 
     fun init(context: Context) {
         if (initialized) return
@@ -65,6 +68,7 @@ object AppContainer {
             appIconManager = AppIconManager(app)
             externalPluginManager = ExternalPluginManager(app, session)
             officialPluginMarket = OfficialPluginMarketRepository(app, externalPluginManager)
+            cdkRepository = CdkRepository(app)
             initialized = true
         }
     }

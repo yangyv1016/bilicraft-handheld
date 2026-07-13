@@ -87,6 +87,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
@@ -100,6 +101,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bilicraft.handheld.appicon.AppIcon
+import com.bilicraft.handheld.cdk.CdkEntry
+import com.bilicraft.handheld.cdk.CdkState
 import com.bilicraft.handheld.config.QuickToolLink
 import com.bilicraft.handheld.config.ServerConfig
 import com.bilicraft.handheld.externalplugin.ExternalPluginEntry
@@ -789,10 +792,18 @@ private fun SettingsScreen(vm: MainViewModel) {
     val preferences by vm.preferences.collectAsStateWithLifecycle()
     val accountList by vm.accounts.collectAsStateWithLifecycle()
     val updateState by vm.updateState.collectAsStateWithLifecycle()
+    val cdkState by vm.cdkState.collectAsStateWithLifecycle()
     var removingAccountUuid by remember { mutableStateOf<String?>(null) }
     var showSourcePicker by remember { mutableStateOf(false) }
     var showIconPicker by remember { mutableStateOf(false) }
     val currentAppIcon by vm.currentAppIcon.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            vm.refreshCdkActiveWindow()
+            delay(CDK_ACTIVE_WINDOW_REFRESH_MS)
+        }
+    }
 
     if (showIconPicker) {
         AppIconPickerScreen(
@@ -872,6 +883,14 @@ private fun SettingsScreen(vm: MainViewModel) {
             )
         }
 
+        item { SectionTitle("CDK") }
+        item {
+            CdkModuleCard(
+                state = cdkState,
+                onRefresh = vm::refreshCdk
+            )
+        }
+
         item { SectionTitle("版本数据") }
         item {
             SettingActions(
@@ -944,6 +963,102 @@ private fun SettingsScreen(vm: MainViewModel) {
             }
         )
     }
+}
+
+@Composable
+private fun CdkModuleCard(
+    state: CdkState,
+    onRefresh: () -> Unit
+) {
+    val clipboardManager = LocalClipboardManager.current
+
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("CDK 展示", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        state.sourceUrl,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                IconButton(onClick = onRefresh, enabled = !state.loading) {
+                    Icon(Icons.Default.Refresh, contentDescription = "刷新 CDK")
+                }
+            }
+            state.updatedAt?.takeIf { it.isNotBlank() }?.let {
+                Text("配置更新时间：$it", style = MaterialTheme.typography.bodySmall)
+            }
+            if (state.loading) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            state.errorMessage?.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            if (state.entries.isEmpty() && !state.loading) {
+                Text(
+                    "当前时间段没有可显示 CDK。更新 CDN 上的 cdk/index.json 后刷新即可生效。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                state.entries.forEachIndexed { index, entry ->
+                    if (index > 0) HorizontalDivider()
+                    CdkEntryItem(
+                        entry = entry,
+                        onCopy = { clipboardManager.setText(AnnotatedString(entry.code)) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CdkEntryItem(
+    entry: CdkEntry,
+    onCopy: () -> Unit
+) {
+    var copied by remember(entry.id, entry.code) { mutableStateOf(false) }
+
+    LaunchedEffect(copied) {
+        if (!copied) return@LaunchedEffect
+        delay(CDK_COPY_FEEDBACK_MS)
+        copied = false
+    }
+
+    ListItem(
+        headlineContent = { Text(entry.title, fontWeight = FontWeight.SemiBold) },
+        supportingContent = {
+            Text(
+                listOfNotNull(
+                    entry.description.takeIf { it.isNotBlank() },
+                    "CDK：${entry.code}",
+                    cdkWindowText(entry)
+                ).joinToString("\n")
+            )
+        },
+        leadingContent = { Icon(Icons.Default.Info, contentDescription = null) },
+        trailingContent = {
+            TextButton(onClick = {
+                onCopy()
+                copied = true
+            }) {
+                Text(if (copied) "已复制" else "复制")
+            }
+        }
+    )
+}
+
+private fun cdkWindowText(entry: CdkEntry): String? = when {
+    !entry.startsAt.isNullOrBlank() && !entry.endsAt.isNullOrBlank() -> "显示时间：${entry.startsAt} ~ ${entry.endsAt}"
+    !entry.startsAt.isNullOrBlank() -> "开始显示：${entry.startsAt}"
+    !entry.endsAt.isNullOrBlank() -> "显示截止：${entry.endsAt}"
+    else -> null
 }
 
 @Composable
@@ -1476,6 +1591,8 @@ private fun EmptyState(
 private val CHAT_BACKGROUND = Color(0xFF1E1E1E)
 private val CHAT_DEFAULT_TEXT = Color(0xFFE0E0E0)
 private const val COMMAND_COMPLETION_DEBOUNCE_MS = 200L
+private const val CDK_ACTIVE_WINDOW_REFRESH_MS = 60_000L
+private const val CDK_COPY_FEEDBACK_MS = 1_600L
 private const val MAX_VISIBLE_COMMAND_SUGGESTIONS = 6
 
 private fun ChatEvent.toAnnotated(): AnnotatedString {

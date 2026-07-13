@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "pluginId": "stock-market-dashboard",
+      "owner": "ShadowYinb",
+      "repo": "Bilicraft-Handheld-Stocks",
+      "releaseAsset": "market-entry.json",
+      "allowedPermissions": [
+        "network"
+      ],
+      "required": false,
+      "enabled": true
+    }
+  ]
+}

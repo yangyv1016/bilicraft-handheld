@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-07-13T00:00:00Z",
+  "entries": [
+    {
+      "id": "bilicraft-handle-public",
+      "title": "Bilicraft Handheld 公共 CDK",
+      "code": "bilicraftHandlepublic",
+      "description": "庆祝 Bilicraft Handheld 1.0 正式发布！",
+      "startsAt": "2026-07-13T00:00:00Z",
+      "endsAt": "2026-12-31T23:59:59Z"
+    }
+  ]
+}

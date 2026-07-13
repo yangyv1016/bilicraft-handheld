@@ -82,14 +82,13 @@ class ExternalPluginManager(
     @Synchronized
     fun uninstall(pluginId: String): Boolean {
         unloadLocked(pluginId)
+        val safePluginId = pluginId.toSafeFileSegment()
         var removed = false
-        installedPluginPackages().forEach { file ->
-            val manifest = runCatching { readManifest(file) }.getOrNull()
-            if (manifest?.id == pluginId || file.nameWithoutExtension == pluginId) {
-                file.setWritable(true)
-                removed = file.delete() || removed
-            }
+        removablePackageFiles(pluginId).forEach { file ->
+            removed = deletePackageFile(file) || removed
         }
+        File(optimizedRoot, safePluginId).deleteRecursively()
+        prefs.edit().remove(enabledPrefKey(pluginId)).apply()
         disabled.remove(pluginId)
         failures.remove(pluginId)
         publishEntriesLocked()
@@ -250,6 +249,26 @@ class ExternalPluginManager(
         .listFiles { file -> file.isFile && file.extension.equals("bhplugin", ignoreCase = true) }
         .orEmpty()
         .sortedBy { it.name.lowercase() }
+
+    private fun droppedPluginPackages(): List<File> = pluginDropDir
+        .listFiles { file -> file.isFile && file.extension.equals("bhplugin", ignoreCase = true) }
+        .orEmpty()
+        .sortedBy { it.name.lowercase() }
+
+    private fun removablePackageFiles(pluginId: String): List<File> {
+        val safePluginId = pluginId.toSafeFileSegment()
+        return (installedPluginPackages() + droppedPluginPackages())
+            .distinctBy { it.absolutePath }
+            .filter { file ->
+                val manifest = runCatching { readManifest(file) }.getOrNull()
+                manifest?.id == pluginId || file.nameWithoutExtension == pluginId || file.nameWithoutExtension == safePluginId
+            }
+    }
+
+    private fun deletePackageFile(file: File): Boolean {
+        file.setWritable(true)
+        return file.delete()
+    }
 
     private fun installedPackageFile(manifest: ExternalPluginManifest): File = File(
         installedDir,

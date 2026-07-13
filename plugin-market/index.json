@@ -1,5 +1,31 @@
 {
   "schemaVersion": 1,
   "updatedAt": "2026-07-12T00:00:00Z",
-  "plugins": []
+  "plugins": [
+    {
+      "id": "stock-market-dashboard",
+      "name": "股市面板",
+      "summary": "帕拉伦股市行情、K 线分析、资金持股查询和股票交易面板。",
+      "description": "为 Bilicraft Handheld 制作的外部 Compose 插件，整合帕拉伦股市行情、多周期 K 线、玩家资金、持股查询以及买入卖出操作。",
+      "repo": "https://github.com/ShadowYinb/Bilicraft-Handheld-Stocks",
+      "author": "ShadowYinb",
+      "category": "gameplay",
+      "latestVersion": "0.1.5",
+      "minAppVersion": "0.2.0",
+      "minApiVersion": 1,
+      "permissions": [
+        "network"
+      ],
+      "releases": [
+        {
+          "version": "0.1.5",
+          "downloadUrl": "https://github.com/ShadowYinb/Bilicraft-Handheld-Stocks/releases/download/v0.1.5/stock-market-0.1.5.bhplugin",
+          "sha256": "2ccb139b84d9831f18911dcc578e773503e74d4e2ed2556807d95a72cedb5cf6",
+          "size": 85718,
+          "changelog": "发布股市面板插件 0.1.5。"
+        }
+      ]
+    }
+    
+  ]
 }

@@ -10,11 +10,14 @@ const appOwner = process.env.APP_OWNER ?? "yangyv1016";
 const appRepo = process.env.APP_REPO ?? "bilicraft-handheld";
 const cdnRoot = stripTrailingSlash(process.env.CDN_ROOT ?? "https://bccdn.yanguiofficial.cn");
 const now = new Date().toISOString();
+const safeSegmentPattern = /^[A-Za-z0-9._-]+$/;
+const safeBhPluginFilePattern = /^[A-Za-z0-9._-]+\.bhplugin$/i;
+const sha256Pattern = /^[a-fA-F0-9]{64}$/;
 
 await rm(outDir, { recursive: true, force: true });
 await mkdir(outDir, { recursive: true });
 
-await writePluginMarketIndex();
+const pluginMarket = await mirrorPluginMarketIndex();
 
 const latestRelease = await fetchJson(
   `https://api.github.com/repos/${appOwner}/${appRepo}/releases/latest`
@@ -104,7 +107,8 @@ await writeJson("/meta/sync-state.json", {
     cdnRoot,
     apkPath: apkCdnPath,
     apkSha256,
-    apkSize
+    apkSize,
+    pluginPackages: pluginMarket.mirroredPackages
   }
 });
 
@@ -113,7 +117,7 @@ console.log(`Release: ${tag}`);
 console.log(`APK: ${apkAsset.name}`);
 console.log(`SHA-256: ${apkSha256}`);
 
-async function writePluginMarketIndex() {
+async function mirrorPluginMarketIndex() {
   const sourcePath = path.join(rootDir, "plugin-market", "index.json");
   const fallback = {
     schemaVersion: 1,
@@ -123,12 +127,147 @@ async function writePluginMarketIndex() {
 
   if (!existsSync(sourcePath)) {
     await writeJson("/plugin-market/index.json", fallback);
-    return;
+    return { mirroredPackages: 0 };
   }
 
   const raw = await readFile(sourcePath, "utf8");
-  JSON.parse(raw);
-  await writeText("/plugin-market/index.json", `${raw.trim()}\n`);
+  const market = JSON.parse(raw);
+  if (!Array.isArray(market.plugins)) {
+    throw new Error("plugin-market/index.json must contain a plugins array.");
+  }
+
+  let mirroredPackages = 0;
+  const plugins = [];
+
+  for (const plugin of market.plugins) {
+    validatePlugin(plugin);
+    const releases = [];
+
+    for (const release of plugin.releases ?? []) {
+      releases.push(await mirrorPluginRelease(plugin, release));
+      mirroredPackages += 1;
+    }
+
+    plugins.push({
+      ...plugin,
+      releases
+    });
+  }
+
+  await writeJson("/plugin-market/index.json", {
+    ...market,
+    plugins
+  });
+
+  return { mirroredPackages };
+}
+
+async function mirrorPluginRelease(plugin, release) {
+  validatePluginRelease(plugin, release);
+
+  const bytes = await fetchBytes(release.downloadUrl);
+  verifyBhPluginBytes(bytes, `${plugin.id}@${release.version}`);
+
+  const expectedSha256 = release.sha256.toLowerCase();
+  const actualSha256 = createHash("sha256").update(bytes).digest("hex");
+  if (actualSha256 !== expectedSha256) {
+    throw new Error(
+      `SHA-256 mismatch for ${plugin.id}@${release.version}: expected ${expectedSha256}, got ${actualSha256}`
+    );
+  }
+
+  const fileName = choosePluginFileName(plugin, release);
+  const cdnPath = `/plugins/${plugin.id}/${release.version}/${fileName}`;
+  const cdnUrl = `${cdnRoot}/plugins/${encodeURIComponent(plugin.id)}/${encodeURIComponent(release.version)}/${encodeURIComponent(fileName)}`;
+
+  await writeBinary(cdnPath, bytes);
+  await writeJson(`/plugins/${plugin.id}/${release.version}/manifest.json`, {
+    schemaVersion: 1,
+    updatedAt: now,
+    plugin: {
+      id: plugin.id,
+      name: plugin.name ?? plugin.id
+    },
+    release: {
+      version: release.version,
+      apiVersion: release.apiVersion ?? null,
+      sourceUrl: release.downloadUrl
+    },
+    artifact: {
+      name: fileName,
+      path: cdnPath,
+      downloadUrl: cdnUrl,
+      sha256: actualSha256,
+      size: bytes.byteLength
+    }
+  });
+
+  return {
+    ...release,
+    downloadUrl: cdnUrl,
+    sha256: actualSha256,
+    size: bytes.byteLength
+  };
+}
+
+function validatePlugin(plugin) {
+  if (!plugin || typeof plugin !== "object") {
+    throw new Error("Invalid plugin entry in plugin-market/index.json.");
+  }
+  if (typeof plugin.id !== "string" || plugin.id.length === 0) {
+    throw new Error("Plugin id is required.");
+  }
+  assertSafeSegment("plugin id", plugin.id);
+  if (plugin.releases !== undefined && !Array.isArray(plugin.releases)) {
+    throw new Error(`Plugin ${plugin.id} releases must be an array.`);
+  }
+}
+
+function validatePluginRelease(plugin, release) {
+  if (!release || typeof release !== "object") {
+    throw new Error(`Invalid release entry for plugin ${plugin.id}.`);
+  }
+  if (typeof release.version !== "string" || release.version.length === 0) {
+    throw new Error(`Release version is required for plugin ${plugin.id}.`);
+  }
+  assertSafeSegment("plugin version", release.version);
+  if (typeof release.downloadUrl !== "string" || release.downloadUrl.length === 0) {
+    throw new Error(`Release ${plugin.id}@${release.version} downloadUrl is required.`);
+  }
+  if (typeof release.sha256 !== "string" || !sha256Pattern.test(release.sha256)) {
+    throw new Error(`Release ${plugin.id}@${release.version} must provide a 64-character SHA-256.`);
+  }
+}
+
+function choosePluginFileName(plugin, release) {
+  const fileNameFromUrl = tryGetFileNameFromUrl(release.downloadUrl);
+  if (fileNameFromUrl && safeBhPluginFilePattern.test(fileNameFromUrl)) {
+    return fileNameFromUrl;
+  }
+  return `${plugin.id}-${release.version}.bhplugin`;
+}
+
+function tryGetFileNameFromUrl(value) {
+  try {
+    const url = new URL(value);
+    const fileName = decodeURIComponent(url.pathname.split("/").filter(Boolean).pop() ?? "");
+    return safeBhPluginFilePattern.test(fileName) ? fileName : null;
+  } catch {
+    return null;
+  }
+}
+
+function verifyBhPluginBytes(bytes, label) {
+  const isZip = bytes.byteLength >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b;
+  if (!isZip) {
+    throw new Error(`Downloaded plugin package is not a zip-compatible .bhplugin: ${label}`);
+  }
+}
+
+function assertSafeSegment(label, value) {
+  if (!safeSegmentPattern.test(value)) {
+    throw new Error(`${label} contains unsafe characters: ${value}`);
+  }
 }
 
 async function fetchJson(url) {
@@ -143,12 +282,19 @@ async function fetchJson(url) {
 
 async function fetchBytes(url) {
   const response = await fetch(url, {
-    headers: githubHeaders("application/octet-stream")
+    headers: downloadHeaders()
   });
   if (!response.ok) {
     throw new Error(`Download failed ${response.status}: ${url}`);
   }
   return Buffer.from(await response.arrayBuffer());
+}
+
+function downloadHeaders() {
+  return {
+    Accept: "application/octet-stream",
+    "User-Agent": "bilicraft-cdn-sync"
+  };
 }
 
 function githubHeaders(accept) {

@@ -187,6 +187,31 @@ class MinecraftClient(
         buf.writeVarInt(sbClientCommand)
         buf.writeVarInt(0)          // actionId=0：perform respawn
         ch.writeAndFlush(buf)
+        // 签名链重建不在这里做：本包会让服务端回下发 Respawn，统一由 CB_RESPAWN 监听触发 resendChatSession，
+        // 从而同时覆盖手动复活与服务端强制重生，保持「发包」与「修链」职责分离。
+    }
+
+    /**
+     * 重发 Chat Session Update 并重置签名链 index（session 体系，1.19.3+）。
+     *
+     * 上报玩家公钥 + Mojang 签名 + sessionId + 过期时间，等价 vanilla setChatSession：
+     * 服务端据此重建 SignedMessageChain.Decoder（期待 index 从 0 起），本地 messageChain.reset()。
+     * 两处触发：进服首个 JoinGame（首次登记公钥）、收到 Respawn 包（修复死亡/换维度后 index 失步）。
+     *
+     * 非签名模式（certificate/signer 缺失或版本不支持 session）直接返回：无链可重建。
+     */
+    private fun resendChatSession(ch: Channel) {
+        val cert = certificate
+        if (cert == null || !palette.sessionSigning || signer == null) return
+        val sbId = palette.sbId(PacketKey.SB_CHAT_SESSION_UPDATE) ?: return
+        val buf = ch.alloc().buffer()
+        buf.writeVarInt(sbId)
+        buf.writeUuid(messageChain.sessionId)
+        buf.writeLong(cert.expiresAtEpochMs)
+        buf.writeByteArray(cert.publicKeyDer)
+        buf.writeByteArray(cert.publicKeySignatureV2)
+        ch.writeAndFlush(buf)
+        messageChain.reset()
     }
 
     fun requestCommandSuggestions(input: String) {
@@ -375,6 +400,13 @@ class MinecraftClient(
                 PacketKey.CB_COMMAND_SUGGESTIONS -> updateCommandSuggestions(buf)
                 PacketKey.CB_DECLARE_COMMANDS -> skipDeclareCommands(buf)
                 PacketKey.CB_START_CONFIGURATION -> acknowledgeConfiguration(ctx)
+                PacketKey.CB_RESPAWN -> {
+                    // 服务端每次让玩家重生/换维度都会下发 Respawn 包（手动点复活、/kill、硬核自动重生均覆盖）。
+                    // 死亡期间发出的聊天让本地 messageChain.index 自增，但服务端拒收 → 双方 index 失步。
+                    // 收到 Respawn 主动重报 ChatSession：服务端重建 Decoder、本地 reset() 归零，双方回到 index 0 对齐。
+                    // 幂等安全：无失步时也只是归零；未签名模式无链，resendChatSession 直接返回。
+                    resendChatSession(ctx.channel())
+                }
                 else -> Unit
             }
         }
@@ -408,28 +440,11 @@ class MinecraftClient(
         }
 
         /**
-         * session 签名（1.19.3+）必需：进 PLAY 后立即发送 Chat Session Update，
-         * 上报玩家公钥 + Mojang 签名 + sessionId + 过期时间。不发则强制签名服拒绝后续聊天。
-         *
-         * 包结构：UUID sessionId | Long expiresAt | ByteArray publicKey(DER) | ByteArray keySignature
+         * 进 PLAY 后首次登记会话公钥（对齐 MCC OnGameJoined 时序）。
+         * 实际发包与链重置在外层 resendChatSession——复活路径也复用同一逻辑。
          */
         private fun sendChatSessionUpdateIfNeeded(ctx: ChannelHandlerContext) {
-            val cert = certificate
-            if (cert == null || !palette.sessionSigning || signer == null) {
-                return
-            }
-            val sbId = palette.sbId(PacketKey.SB_CHAT_SESSION_UPDATE) ?: return
-            val buf = ctx.alloc().buffer()
-            buf.writeVarInt(sbId)
-            buf.writeUuid(messageChain.sessionId)
-            buf.writeLong(cert.expiresAtEpochMs)
-            buf.writeByteArray(cert.publicKeyDer)
-            buf.writeByteArray(cert.publicKeySignatureV2)
-            ctx.writeAndFlush(buf)
-
-            // 重报 session = 新后端签名链起点，index 必须归零（对齐 vanilla 重建 Encoder）。
-            // 否则切回原后端时 index 不从 0 起，后端判定乱序/链断裂 → 聊天被禁用。
-            messageChain.reset()
+            resendChatSession(ctx.channel())
         }
 
         /**

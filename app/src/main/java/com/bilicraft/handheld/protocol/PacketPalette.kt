@@ -60,6 +60,7 @@ enum class PacketKey(val phase: PacketPhase) {
     CB_SYSTEM_CHAT(PacketPhase.PLAY),                   // 系统消息（服务器广播、命令回显等，多数聊天走这里）
     CB_PLAYER_CHAT(PacketPhase.PLAY),                   // 玩家签名聊天（结构复杂，这里只提取可读文本）
     CB_START_CONFIGURATION(PacketPhase.PLAY),           // 1.20.2+ 代理服切换子服时要求回到 configuration
+    CB_RESPAWN(PacketPhase.PLAY),                       // 重生/换维度：收到后重建签名链，修复死亡期间 index 失步
 }
 
 /**
@@ -152,6 +153,7 @@ object PaletteRegistry {
                 PacketKey.CB_SYSTEM_CHAT to play.cbSystemChat,
                 PacketKey.CB_PLAYER_CHAT to play.cbPlayerChat,
                 PacketKey.CB_START_CONFIGURATION to play.cbStartConfiguration,
+                PacketKey.CB_RESPAWN to play.cbRespawn,
             )
         )
     }
@@ -177,6 +179,7 @@ object PaletteRegistry {
         val cbPlayerChat: Int,
         val cbJoinGame: Int,
         val cbStartConfiguration: Int,
+        val cbRespawn: Int,
     )
 
     private fun modernPlayChatIds(protocol: Int): PlayChatIds = when {
@@ -197,6 +200,7 @@ object PaletteRegistry {
             cbPlayerChat = 0x41,
             cbJoinGame = 0x31,
             cbStartConfiguration = 0x76,
+            cbRespawn = 0x52,            // 26.1/26.2（MCC Palette261 权威）
         )
         // 773–774：1.21.9 / 1.21.10 / 1.21.11（MCC Palette1219）
         protocol >= 773 -> PlayChatIds(
@@ -215,6 +219,7 @@ object PaletteRegistry {
             cbPlayerChat = 0x3F,
             cbJoinGame = 0x30,
             cbStartConfiguration = 0x74,
+            cbRespawn = 0x50,            // 1.21.9–1.21.11（minecraft-data 核实）
         )
         // 771–772：1.21.6 / 1.21.7 / 1.21.8（MCC Palette1216）
         protocol >= 771 -> PlayChatIds(
@@ -233,6 +238,7 @@ object PaletteRegistry {
             cbPlayerChat = 0x3A,
             cbJoinGame = 0x2B,
             cbStartConfiguration = 0x6F,
+            cbRespawn = 0x4B,            // 1.21.6–1.21.8（minecraft-data 核实）
         )
         // 770：1.21.5（MCC Palette1215）
         protocol >= 770 -> PlayChatIds(
@@ -251,6 +257,7 @@ object PaletteRegistry {
             cbPlayerChat = 0x3A,
             cbJoinGame = 0x2B,
             cbStartConfiguration = 0x6F,
+            cbRespawn = 0x4B,            // 1.21.5（minecraft-data 核实）
         )
         // 768–769：1.21.2 / 1.21.3 / 1.21.4（MCC Palette1212 与 Palette1214，聊天链路 id 一致）
         protocol >= 768 -> PlayChatIds(
@@ -269,6 +276,7 @@ object PaletteRegistry {
             cbPlayerChat = 0x3B,
             cbJoinGame = 0x2C,
             cbStartConfiguration = 0x70,
+            cbRespawn = 0x4C,            // 1.21.2–1.21.4（minecraft-data 核实）
         )
         // 767：1.21 / 1.21.1（MCC Palette121）。
         // 注意：764–766（1.20.2/1.20.3/1.20.5/1.20.6，MCC Palette1202/1204/1206）也会落到此分支，
@@ -289,6 +297,7 @@ object PaletteRegistry {
             cbPlayerChat = 0x39,
             cbJoinGame = 0x2B,
             cbStartConfiguration = 0x69,
+            cbRespawn = 0x47,            // 1.21/1.21.1（minecraft-data 核实）
         )
     }
 

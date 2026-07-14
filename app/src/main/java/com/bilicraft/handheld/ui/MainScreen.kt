@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
@@ -278,6 +279,15 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
                     enabled = pluginEntrypoints.isNotEmpty()
                 ) {
                     Icon(Icons.Default.Build, contentDescription = "插件入口")
+                }
+                val currentServerId = servers.getOrNull(selectedIndex)?.id
+                val currentConnected = currentServerId != null &&
+                    runtime.connectionStates[currentServerId] is ConnectionState.Connected
+                IconButton(
+                    onClick = { vm.respawn() },
+                    enabled = currentConnected
+                ) {
+                    Icon(Icons.Default.Favorite, contentDescription = "复活")
                 }
                 IconButton(onClick = { showCreateDialog = true }) {
                     Icon(Icons.Default.Add, contentDescription = "新增服务器")

@@ -358,6 +358,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         session.sendChat(text)
     }
 
+    fun respawn() {
+        val activeId = _serverRuntime.value.activeServerId
+        if (activeId == null || _serverRuntime.value.connectionStates[activeId] !is ConnectionState.Connected) {
+            _uiMessage.value = "请先连接服务器再复活"
+            return
+        }
+        session.respawn()
+        _uiMessage.value = "已发送复活请求"
+    }
+
     fun requestCommandSuggestions(serverId: String, input: String) {
         if (_serverRuntime.value.activeServerId != serverId || !preferences.value.commandCompletionEnabled) {
             _commandSuggestions.value = CommandSuggestions.Empty

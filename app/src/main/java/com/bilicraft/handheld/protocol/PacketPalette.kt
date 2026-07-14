@@ -41,6 +41,7 @@ enum class PacketKey(val phase: PacketPhase) {
     SB_COMMAND_SUGGESTION(PacketPhase.PLAY),            // 1.13+ 命令补全请求（Command Suggestions Request）
     SB_CHAT_SESSION_UPDATE(PacketPhase.PLAY),           // 1.19.3+ session 体系：上报玩家公钥/会话
     SB_ACKNOWLEDGE_CONFIGURATION(PacketPhase.PLAY),     // 1.20.2+ 子服/世界切换：确认从 play 回到 configuration
+    SB_CLIENT_COMMAND(PacketPhase.PLAY),                // Client Command：actionId=0 请求重生（死亡后手动复活）
 
     // --- clientbound ---
     CB_ENCRYPTION_REQUEST(PacketPhase.LOGIN),
@@ -130,6 +131,7 @@ object PaletteRegistry {
                 *(if (protocol >= 767) arrayOf(PacketKey.SB_COMMAND_SUGGESTION to play.sbCommandSuggestion) else emptyArray()),
                 PacketKey.SB_CHAT_SESSION_UPDATE to play.sbChatSessionUpdate,
                 PacketKey.SB_ACKNOWLEDGE_CONFIGURATION to play.sbAcknowledgeConfiguration,
+                PacketKey.SB_CLIENT_COMMAND to play.sbClientCommand,
             ),
             cbMap = mapOf(
                 PacketKey.CB_ENCRYPTION_REQUEST to 0x01,
@@ -166,6 +168,7 @@ object PaletteRegistry {
         val sbKeepAlive: Int,
         val sbChatSessionUpdate: Int,
         val sbAcknowledgeConfiguration: Int,
+        val sbClientCommand: Int,        // Client Command（actionId VarInt，0=perform respawn）
         val cbDisconnect: Int,
         val cbKeepAlive: Int,
         val cbCommandSuggestions: Int,
@@ -185,6 +188,7 @@ object PaletteRegistry {
             sbKeepAlive = 0x1C,
             sbChatSessionUpdate = 0x0A,
             sbAcknowledgeConfiguration = 0x10,
+            sbClientCommand = 0x0C,      // 773 段 0x0B 统一 +1（26.x 全表偏移）
             cbDisconnect = 0x20,
             cbKeepAlive = 0x2C,
             cbCommandSuggestions = 0x0F,
@@ -202,6 +206,7 @@ object PaletteRegistry {
             sbKeepAlive = 0x1B,
             sbChatSessionUpdate = 0x09,
             sbAcknowledgeConfiguration = 0x0F,
+            sbClientCommand = 0x0B,      // 1.21.9–1.21.11（minecraft-data 核实）
             cbDisconnect = 0x20,
             cbKeepAlive = 0x2B,
             cbCommandSuggestions = 0x0F,
@@ -219,6 +224,7 @@ object PaletteRegistry {
             sbKeepAlive = 0x1B,
             sbChatSessionUpdate = 0x09,
             sbAcknowledgeConfiguration = 0x0F,
+            sbClientCommand = 0x0B,      // 1.21.6–1.21.8（minecraft-data 核实）
             cbDisconnect = 0x1C,
             cbKeepAlive = 0x26,
             cbCommandSuggestions = 0x0F,
@@ -236,6 +242,7 @@ object PaletteRegistry {
             sbKeepAlive = 0x1A,
             sbChatSessionUpdate = 0x08,
             sbAcknowledgeConfiguration = 0x0E,
+            sbClientCommand = 0x0A,      // 1.21.5（minecraft-data 核实）
             cbDisconnect = 0x1C,
             cbKeepAlive = 0x26,
             cbCommandSuggestions = 0x0F,
@@ -253,6 +260,7 @@ object PaletteRegistry {
             sbKeepAlive = 0x1A,
             sbChatSessionUpdate = 0x08,
             sbAcknowledgeConfiguration = 0x0E,
+            sbClientCommand = 0x0A,      // 1.21.2–1.21.4（minecraft-data 核实）
             cbDisconnect = 0x1D,
             cbKeepAlive = 0x27,
             cbCommandSuggestions = 0x10,
@@ -272,6 +280,7 @@ object PaletteRegistry {
             sbKeepAlive = 0x18,
             sbChatSessionUpdate = 0x07,
             sbAcknowledgeConfiguration = 0x0C,
+            sbClientCommand = 0x09,      // 1.21/1.21.1（minecraft-data 核实）
             cbDisconnect = 0x1D,
             cbKeepAlive = 0x26,
             cbCommandSuggestions = 0x10,

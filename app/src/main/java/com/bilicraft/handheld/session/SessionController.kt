@@ -130,6 +130,10 @@ class SessionController(
         client?.sendChat(text)
     }
 
+    fun respawn() {
+        client?.sendRespawn()
+    }
+
     fun requestCommandSuggestions(input: String) {
         client?.requestCommandSuggestions(input)
     }

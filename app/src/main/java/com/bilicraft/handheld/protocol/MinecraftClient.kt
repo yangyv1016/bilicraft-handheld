@@ -171,6 +171,24 @@ class MinecraftClient(
         ch.writeAndFlush(buf)
     }
 
+    /**
+     * 请求复活（play 阶段有效）。
+     *
+     * Client Command 包结构（全版本稳定）：仅一个 VarInt actionId。
+     *   actionId=0 → perform respawn（死亡界面点「重生」等价操作）
+     *   actionId=1 → request stats（本客户端不用）
+     * 死亡后本客户端不自动复活，由用户手动触发此包。
+     */
+    fun sendRespawn() {
+        val ch = channel ?: return
+        if (phase != Phase.PLAY) return
+        val sbClientCommand = palette.sbId(PacketKey.SB_CLIENT_COMMAND) ?: return
+        val buf = ch.alloc().buffer()
+        buf.writeVarInt(sbClientCommand)
+        buf.writeVarInt(0)          // actionId=0：perform respawn
+        ch.writeAndFlush(buf)
+    }
+
     fun requestCommandSuggestions(input: String) {
         val ch = channel ?: return
         if (phase != Phase.PLAY || !input.startsWith("/")) {

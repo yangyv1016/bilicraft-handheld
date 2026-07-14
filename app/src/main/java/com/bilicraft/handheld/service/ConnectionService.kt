@@ -3,6 +3,7 @@ package com.bilicraft.handheld.service
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -12,6 +13,7 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.bilicraft.handheld.AppContainer
+import com.bilicraft.handheld.ui.MainActivity
 import com.bilicraft.handheld.protocol.ServerAddress
 import com.bilicraft.handheld.protocol.ChatSigningMode
 import com.bilicraft.handheld.version.McVersion
@@ -153,7 +155,25 @@ class ConnectionService : Service() {
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setContentIntent(contentIntent())
             .build()
+
+    /**
+     * 点击通知回到应用主界面。
+     * SINGLE_TOP + CLEAR_TOP：复用已存在的 MainActivity 实例，避免重复入栈。
+     * FLAG_IMMUTABLE：Android 12+ 强制要求，且本 Intent 无需被外部改写。
+     */
+    private fun contentIntent(): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        return PendingIntent.getActivity(
+            this, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
 
     private fun updateNotification(text: String) {
         (getSystemService(NotificationManager::class.java))

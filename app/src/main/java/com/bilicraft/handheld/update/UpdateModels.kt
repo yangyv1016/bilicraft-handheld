@@ -27,11 +27,11 @@ enum class DownloadSource(
     val description: String,
     private val prefix: String
 ) {
-    CLOUDFLARE("镜像 · Cloudflare", "通过 bccdn.yanguiofficial.cn 加速", "https://bccdn.yanguiofficial.cn/"),
-    GH_PROXY("镜像 · gh-proxy", "国内推荐，通过 gh-proxy.com 加速", "https://gh-proxy.com/"),
-    GHPROXY_NET("镜像 · ghproxy.net", "备用镜像，gh-proxy.com 不通时可切换", "https://ghproxy.net/"),
-    MIRROR_GHPROXY("镜像 · mirror.ghproxy", "备用镜像，通过 mirror.ghproxy.com 加速", "https://mirror.ghproxy.com/"),
-    DIRECT("直连 GitHub", "不走镜像，海外网络或已有代理时使用", "");
+    CLOUDFLARE("加速线路 · 推荐", "默认线路，适合国内网络", "https://bccdn.yanguiofficial.cn/"),
+    GH_PROXY("加速线路 · 备用一", "推荐线路不稳定时切换", "https://gh-proxy.com/"),
+    GHPROXY_NET("加速线路 · 备用二", "备用一不通时可尝试", "https://ghproxy.net/"),
+    MIRROR_GHPROXY("加速线路 · 备用三", "以上均不通时可尝试", "https://mirror.ghproxy.com/"),
+    DIRECT("直连线路", "海外网络或已有代理时使用", "");
 
     /** 把 GitHub 原始 URL 变成经由本源的实际请求 URL。直连原样返回，镜像加前缀。 */
     fun rewrite(githubUrl: String): String =

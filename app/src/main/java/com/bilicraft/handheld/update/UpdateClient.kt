@@ -111,7 +111,7 @@ class UpdateClient(
             ReleaseInfo(
                 tagName = tag,
                 versionName = tag.removePrefix("v"),
-                releaseNotes = root.optString("body", ""),
+                releaseNotes = ReleaseNotes.humanize(root.optString("body", "")),
                 apkDownloadUrl = apkUrl.getString("browser_download_url"),
                 apkSizeBytes = apkUrl.optLong("size", 0L)
             )

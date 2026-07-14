@@ -452,7 +452,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setDownloadSource(source: DownloadSource) {
         viewModelScope.launch {
             uiConfigRepo.setDownloadSource(source)
-            _uiMessage.value = "更新下载源已切换为「${source.displayName}」"
+            _uiMessage.value = "下载线路已切换为「${source.displayName}」"
         }
     }
 
@@ -475,8 +475,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) { officialPluginMarket.refresh() }
             _uiMessage.value = result.fold(
-                onSuccess = { "官方插件源已刷新，共 $it 个插件" },
-                onFailure = { "官方插件源刷新失败：${it.message ?: "未知错误"}" }
+                onSuccess = { "插件市场已刷新，共 $it 个插件" },
+                onFailure = { "插件市场刷新失败：${it.message ?: "未知错误"}" }
             )
         }
     }

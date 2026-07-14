@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
@@ -53,7 +54,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
@@ -86,13 +86,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -228,6 +231,7 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
     var editingServer by remember { mutableStateOf<ServerConfig?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var menuServer by remember { mutableStateOf<ServerConfig?>(null) }
+    var showPluginEntrypoints by remember { mutableStateOf(false) }
 
     LaunchedEffect(servers.size) {
         selectedIndex = selectedIndex.coerceIn(0, (servers.size - 1).coerceAtLeast(0))
@@ -269,6 +273,12 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
                         )
                     }
                 }
+                IconButton(
+                    onClick = { showPluginEntrypoints = true },
+                    enabled = pluginEntrypoints.isNotEmpty()
+                ) {
+                    Icon(Icons.Default.Build, contentDescription = "插件入口")
+                }
                 IconButton(onClick = { showCreateDialog = true }) {
                     Icon(Icons.Default.Add, contentDescription = "新增服务器")
                 }
@@ -287,15 +297,11 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
                     chatAutoScroll = preferences.chatAutoScroll,
                     commandCompletionEnabled = preferences.commandCompletionEnabled,
                     commandSuggestions = commandSuggestions,
-                    pluginEntrypoints = pluginEntrypoints,
                     onConnect = { vm.connect(selectedServer) },
                     onStop = vm::stopConnection,
                     onSend = { vm.sendChat(selectedServer.id, it) },
                     onRequestCommandSuggestions = { vm.requestCommandSuggestions(selectedServer.id, it) },
-                    onEdit = { editingServer = selectedServer },
-                    onOpenPluginEntrypoint = { entry ->
-                        vm.openExternalPluginEntrypoint(entry.pluginId, entry.entrypointId)
-                    }
+                    onEdit = { editingServer = selectedServer }
                 )
             }
         }
@@ -361,6 +367,17 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
             }
         )
     }
+
+    if (showPluginEntrypoints) {
+        PluginEntrypointPickerDialog(
+            entrypoints = pluginEntrypoints,
+            onOpen = { entry ->
+                showPluginEntrypoints = false
+                vm.openExternalPluginEntrypoint(entry.pluginId, entry.entrypointId)
+            },
+            onDismiss = { showPluginEntrypoints = false }
+        )
+    }
 }
 
 @Composable
@@ -372,123 +389,188 @@ private fun ServerSessionPage(
     chatAutoScroll: Boolean,
     commandCompletionEnabled: Boolean,
     commandSuggestions: CommandSuggestionState,
-    pluginEntrypoints: List<ExternalPluginEntrypoint>,
     onConnect: () -> Unit,
     onStop: () -> Unit,
     onSend: (String) -> Unit,
     onRequestCommandSuggestions: (String) -> Unit,
-    onEdit: () -> Unit,
-    onOpenPluginEntrypoint: (ExternalPluginEntrypoint) -> Unit
+    onEdit: () -> Unit
 ) {
     val connected = isActiveServer && conn is ConnectionState.Connected
     val connecting = isActiveServer && conn !is ConnectionState.Disconnected && conn !is ConnectionState.Failed
-    var input by remember(server.id) { mutableStateOf("") }
-    var showPluginEntrypoints by remember(server.id) { mutableStateOf(false) }
+    var input by remember(server.id) { mutableStateOf(TextFieldValue("")) }
 
-    LaunchedEffect(input, connected, commandCompletionEnabled) {
-        if (!connected || !commandCompletionEnabled || !input.startsWith("/")) {
+    LaunchedEffect(input.text, connected, commandCompletionEnabled) {
+        if (!connected || !commandCompletionEnabled || !input.text.startsWith("/")) {
             onRequestCommandSuggestions("")
             return@LaunchedEffect
         }
         delay(COMMAND_COMPLETION_DEBOUNCE_MS)
-        onRequestCommandSuggestions(input)
+        onRequestCommandSuggestions(input.text)
     }
 
-    Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().padding(12.dp)) {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.Top
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(server.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                            Text("${server.host}:${server.port}", style = MaterialTheme.typography.bodyMedium)
-                            Spacer(Modifier.height(8.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                AssistChip(onClick = {}, label = { Text(statusText(conn)) })
-                                AssistChip(onClick = {}, label = { Text(server.versionId) })
-                                if (server.signingRequired) AssistChip(onClick = {}, label = { Text("强制签名") })
-                            }
-                        }
-                        IconButton(onClick = onEdit) { Icon(Icons.Default.Edit, contentDescription = "编辑") }
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = onConnect, enabled = !connecting, modifier = Modifier.weight(1f)) {
-                            Icon(Icons.Default.SportsEsports, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("连接")
-                        }
-                        OutlinedButton(onClick = onStop, enabled = isActiveServer, modifier = Modifier.weight(1f)) {
-                            Icon(Icons.Default.Stop, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("断开")
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-            key(server.id) {
-                ChatLog(log = log, autoScroll = chatAutoScroll, modifier = Modifier.weight(1f).fillMaxWidth())
-            }
-            val visibleSuggestions = commandSuggestions.takeIf {
-                connected && commandCompletionEnabled && it.requestInput == input && it.hasSuggestions
-            }
-            if (visibleSuggestions != null) {
-                Spacer(Modifier.height(8.dp))
-                CommandSuggestionBar(
-                    state = visibleSuggestions,
-                    onSelect = { suggestion ->
-                        input = CommandSuggestions.apply(input, visibleSuggestions.start, visibleSuggestions.length, suggestion.text)
-                    }
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    label = { Text("发送聊天…") },
-                    singleLine = true,
-                    enabled = connected,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
-                Button(
-                    onClick = { onSend(input); input = ""; onRequestCommandSuggestions("") },
-                    enabled = connected && input.isNotBlank()
-                ) {
-                    Icon(Icons.Default.Send, contentDescription = null)
-                    Spacer(Modifier.width(6.dp))
-                    Text("发送")
-                }
-            }
-        }
-
-        FloatingActionButton(
-            onClick = { showPluginEntrypoints = true },
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 20.dp, bottom = 88.dp)
-        ) {
-            Icon(Icons.Default.Build, contentDescription = "插件入口")
-        }
-    }
-
-    if (showPluginEntrypoints) {
-        PluginEntrypointPickerDialog(
-            entrypoints = pluginEntrypoints,
-            onOpen = { entry ->
-                showPluginEntrypoints = false
-                onOpenPluginEntrypoint(entry)
-            },
-            onDismiss = { showPluginEntrypoints = false }
+    Column(Modifier.fillMaxSize().padding(12.dp)) {
+        ServerInfoBar(
+            server = server,
+            conn = conn,
+            connected = connected,
+            connecting = connecting,
+            isActiveServer = isActiveServer,
+            onConnect = onConnect,
+            onStop = onStop,
+            onEdit = onEdit
         )
+
+        Spacer(Modifier.height(12.dp))
+        key(server.id) {
+            ChatLog(log = log, autoScroll = chatAutoScroll, modifier = Modifier.weight(1f).fillMaxWidth())
+        }
+        val visibleSuggestions = commandSuggestions.takeIf {
+            connected && commandCompletionEnabled && it.requestInput == input.text && it.hasSuggestions
+        }
+        if (visibleSuggestions != null) {
+            Spacer(Modifier.height(8.dp))
+            CommandSuggestionBar(
+                state = visibleSuggestions,
+                onSelect = { suggestion ->
+                    val applied = CommandSuggestions.apply(input.text, visibleSuggestions.start, visibleSuggestions.length, suggestion.text)
+                    input = TextFieldValue(applied, selection = TextRange(applied.length))
+                }
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = input,
+                onValueChange = { input = it },
+                label = { Text("发送聊天…") },
+                singleLine = true,
+                enabled = connected,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = { onSend(input.text); input = TextFieldValue(""); onRequestCommandSuggestions("") },
+                enabled = connected && input.text.isNotBlank()
+            ) {
+                Icon(Icons.Default.Send, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("发送")
+            }
+        }
     }
+}
+
+/**
+ * 服务器信息条（瘦身版）。
+ * 旧版是「标题+地址+三枚 chip+两个整宽按钮」竖排，占了约 5 行。
+ * 现在压成单卡片一行：状态圆点 + 名称/地址两行小字 + 单个连接/断开切换按钮 + 编辑图标。
+ * 连接态用一个按钮切换语义（未连时=连接，连接/连接中=断开），避免两个整宽按钮浪费纵向空间。
+ * 版本号与「强制签名」降级为副标题里的小字，需要修改时进编辑弹窗，不再占主视觉。
+ */
+@Composable
+private fun ServerInfoBar(
+    server: ServerConfig,
+    conn: ConnectionState,
+    connected: Boolean,
+    connecting: Boolean,
+    isActiveServer: Boolean,
+    onConnect: () -> Unit,
+    onStop: () -> Unit,
+    onEdit: () -> Unit
+) {
+    val active = connected || connecting
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            StatusDot(conn)
+            Column(Modifier.weight(1f)) {
+                Text(
+                    server.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        statusText(conn),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = statusColor(conn),
+                        maxLines = 1
+                    )
+                    Text(
+                        "· ${server.host}:${server.port} · ${server.versionId}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (server.signingRequired) {
+                        Icon(
+                            Icons.Default.Lock,
+                            contentDescription = "强制签名",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
+            }
+            IconButton(onClick = onEdit) {
+                Icon(Icons.Default.Edit, contentDescription = "编辑", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (active) {
+                FilledTonalButton(
+                    onClick = onStop,
+                    enabled = isActiveServer,
+                    contentPadding = PaddingValues(horizontal = 16.dp)
+                ) {
+                    Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (connecting && !connected) "连接中" else "断开")
+                }
+            } else {
+                Button(
+                    onClick = onConnect,
+                    contentPadding = PaddingValues(horizontal = 16.dp)
+                ) {
+                    Icon(Icons.Default.SportsEsports, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("连接")
+                }
+            }
+        }
+    }
+}
+
+/** 连接状态色点：绿=已连接，黄=进行中，红=失败，灰=未连接。Reconnecting 时脉冲提示。 */
+@Composable
+private fun StatusDot(conn: ConnectionState) {
+    Box(
+        Modifier
+            .size(10.dp)
+            .clip(CircleShape)
+            .background(statusColor(conn))
+    )
+}
+
+private val StatusGreen = Color(0xFF2E7D32)
+private val StatusAmber = Color(0xFFF9A825)
+private val StatusRed = Color(0xFFC62828)
+private val StatusGray = Color(0xFF9E9E9E)
+
+private fun statusColor(state: ConnectionState): Color = when (state) {
+    is ConnectionState.Connected -> StatusGreen
+    is ConnectionState.Connecting,
+    is ConnectionState.LoggingIn,
+    is ConnectionState.Reconnecting -> StatusAmber
+    is ConnectionState.Failed -> StatusRed
+    is ConnectionState.Disconnected -> StatusGray
 }
 
 @Composable
@@ -738,16 +820,8 @@ private fun QuickToolItem(
 ) {
     ListItem(
         headlineContent = { Text(link.title, fontWeight = FontWeight.SemiBold) },
-        supportingContent = {
-            Column {
-                Text(link.url, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (link.description.isNotBlank()) Text(link.description, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    "拖拽排序依赖更完整的手势适配；当前保留基础展示、打开、编辑、删除。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+        supportingContent = link.description.takeIf { it.isNotBlank() }?.let {
+            { Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis) }
         },
         leadingContent = { Icon(Icons.Default.Link, contentDescription = null) },
         trailingContent = {
@@ -911,9 +985,10 @@ private fun SettingsScreen(vm: MainViewModel) {
         }
         item {
             ListItem(
-                headlineContent = { Text("更新下载源") },
-                supportingContent = { Text("${preferences.downloadSource.displayName} · ${preferences.downloadSource.description}") },
-                leadingContent = { Icon(Icons.Default.Link, contentDescription = null) },
+                headlineContent = { Text("下载线路") },
+                supportingContent = { Text(preferences.downloadSource.displayName) },
+                leadingContent = { Icon(Icons.Default.SwapHoriz, contentDescription = null) },
+                trailingContent = { Icon(Icons.Default.ChevronRight, contentDescription = null) },
                 modifier = Modifier.clickable { showSourcePicker = true }
             )
         }
@@ -979,19 +1054,16 @@ private fun CdkModuleCard(
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("CDK 展示", fontWeight = FontWeight.SemiBold)
+                    Text("CDK 兑换码", fontWeight = FontWeight.SemiBold)
                     Text(
-                        state.sourceUrl,
+                        "限时福利，记得及时兑换",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 IconButton(onClick = onRefresh, enabled = !state.loading) {
-                    Icon(Icons.Default.Refresh, contentDescription = "刷新 CDK")
+                    Icon(Icons.Default.Refresh, contentDescription = "刷新")
                 }
-            }
-            state.updatedAt?.takeIf { it.isNotBlank() }?.let {
-                Text("配置更新时间：$it", style = MaterialTheme.typography.bodySmall)
             }
             if (state.loading) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
@@ -1001,7 +1073,7 @@ private fun CdkModuleCard(
             }
             if (state.entries.isEmpty() && !state.loading) {
                 Text(
-                    "当前时间段没有可显示 CDK。更新 CDN 上的 cdk/index.json 后刷新即可生效。",
+                    "当前没有可兑换的 CDK，稍后再来看看。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1110,7 +1182,6 @@ private fun PluginCenterScreen(vm: MainViewModel) {
         item { SectionTitle("官方插件市场") }
         item {
             OfficialPluginMarketHeader(
-                sourceUrl = officialMarket.sourceUrl,
                 updatedAt = officialMarket.updatedAt,
                 loading = officialMarket.loading,
                 errorMessage = officialMarket.errorMessage,
@@ -1141,7 +1212,6 @@ private fun PluginCenterScreen(vm: MainViewModel) {
 
 @Composable
 private fun OfficialPluginMarketHeader(
-    sourceUrl: String,
     updatedAt: String?,
     loading: Boolean,
     errorMessage: String?,
@@ -1149,14 +1219,15 @@ private fun OfficialPluginMarketHeader(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp)
     ) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("官方源", fontWeight = FontWeight.SemiBold)
+                    Text("官方精选", fontWeight = FontWeight.SemiBold)
                     Text(
-                        sourceUrl,
+                        "经过官方审核的插件，安全可靠",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1344,9 +1415,8 @@ private fun UpdateDialog(
             title = { Text("发现新版本 ${state.info.versionName}") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (state.info.releaseNotes.isNotBlank()) {
-                        Text(state.info.releaseNotes, style = MaterialTheme.typography.bodyMedium, maxLines = 12, overflow = TextOverflow.Ellipsis)
-                    }
+                    Text("更新内容", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                    Text(state.info.releaseNotes, style = MaterialTheme.typography.bodyMedium, maxLines = 12, overflow = TextOverflow.Ellipsis)
                     Text(
                         "更新前请确认：应用内更新要求新旧包签名一致，否则系统会拒绝覆盖安装。",
                         style = MaterialTheme.typography.labelSmall,
@@ -1408,8 +1478,8 @@ private fun DownloadSourceDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Default.Link, contentDescription = null) },
-        title = { Text("更新下载源") },
+        icon = { Icon(Icons.Default.SwapHoriz, contentDescription = null) },
+        title = { Text("下载线路") },
         text = {
             Column {
                 DownloadSource.entries.forEach { source ->

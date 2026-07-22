@@ -88,6 +88,9 @@ class MinecraftClient(
     // 会话公钥是否已上报（一次性守卫）：JoinGame 会在重生/换世界时重复到达，只在首个 JoinGame 上报。
     @Volatile private var chatSessionReported = false
 
+    // 死亡期间服务端会拒绝聊天。必须在签名前本地拦截，否则 messageIndex 已自增、服务端未消费，复活后签名链失步。
+    @Volatile private var playerDead = false
+
     @Volatile private var commandSuggestionRequestId = 0
     @Volatile private var latestCommandSuggestionInput = ""
 
@@ -117,6 +120,7 @@ class MinecraftClient(
         channel?.close()
         group?.shutdownGracefully()
         channel = null
+        playerDead = false
         commandSuggestionRequestId++
         latestCommandSuggestionInput = ""
         _commandSuggestions.value = CommandSuggestions.Empty
@@ -135,7 +139,7 @@ class MinecraftClient(
      */
     fun sendChat(text: String) {
         val ch = channel ?: return
-        if (phase != Phase.PLAY) return
+        if (phase != Phase.PLAY || playerDead) return
         // 斜杠开头是命令：1.19+ 走独立的 Chat Command 包，不能当普通聊天发（服务器会把它当聊天文本，命令不执行）。
         if (text.startsWith("/")) {
             sendCommand(ch, text.removePrefix("/"))
@@ -187,8 +191,7 @@ class MinecraftClient(
         buf.writeVarInt(sbClientCommand)
         buf.writeVarInt(0)          // actionId=0：perform respawn
         ch.writeAndFlush(buf)
-        // 签名链重建不在这里做：本包会让服务端回下发 Respawn，统一由 CB_RESPAWN 监听触发 resendChatSession，
-        // 从而同时覆盖手动复活与服务端强制重生，保持「发包」与「修链」职责分离。
+        // 存活状态只以服务端 CB_RESPAWN 为准，避免发包失败或被拒绝时提前恢复聊天。
     }
 
     /**
@@ -196,7 +199,7 @@ class MinecraftClient(
      *
      * 上报玩家公钥 + Mojang 签名 + sessionId + 过期时间，等价 vanilla setChatSession：
      * 服务端据此重建 SignedMessageChain.Decoder（期待 index 从 0 起），本地 messageChain.reset()。
-     * 两处触发：进服首个 JoinGame（首次登记公钥）、收到 Respawn 包（修复死亡/换维度后 index 失步）。
+     * 只在首次 JoinGame 或 configuration 往返后的新 PLAY 会话触发；普通死亡/重生不重建连接级聊天链。
      *
      * 非签名模式（certificate/signer 缺失或版本不支持 session）直接返回：无链可重建。
      */
@@ -216,7 +219,7 @@ class MinecraftClient(
 
     fun requestCommandSuggestions(input: String) {
         val ch = channel ?: return
-        if (phase != Phase.PLAY || !input.startsWith("/")) {
+        if (phase != Phase.PLAY || playerDead || !input.startsWith("/")) {
             commandSuggestionRequestId++
             latestCommandSuggestionInput = ""
             _commandSuggestions.value = CommandSuggestions.clearFor(input)
@@ -267,6 +270,7 @@ class MinecraftClient(
 
         override fun channelActive(ctx: ChannelHandlerContext) {
             channel = ctx.channel()
+            playerDead = false
             phase = Phase.HANDSHAKE
             _state.value = ConnectionState.LoggingIn
 
@@ -400,12 +404,14 @@ class MinecraftClient(
                 PacketKey.CB_COMMAND_SUGGESTIONS -> updateCommandSuggestions(buf)
                 PacketKey.CB_DECLARE_COMMANDS -> skipDeclareCommands(buf)
                 PacketKey.CB_START_CONFIGURATION -> acknowledgeConfiguration(ctx)
+                PacketKey.CB_UPDATE_HEALTH -> {
+                    val health = buf.readFloat()
+                    playerDead = health <= 0f
+                }
                 PacketKey.CB_RESPAWN -> {
-                    // 服务端每次让玩家重生/换维度都会下发 Respawn 包（手动点复活、/kill、硬核自动重生均覆盖）。
-                    // 死亡期间发出的聊天让本地 messageChain.index 自增，但服务端拒收 → 双方 index 失步。
-                    // 收到 Respawn 主动重报 ChatSession：服务端重建 Decoder、本地 reset() 归零，双方回到 index 0 对齐。
-                    // 幂等安全：无失步时也只是归零；未签名模式无链，resendChatSession 直接返回。
-                    resendChatSession(ctx.channel())
+                    // Respawn 同时用于死亡重生和换维度。它不重置连接级聊天链，只恢复发送能力。
+                    // 死亡期间的聊天已在 sendChat 入口拦截，因此 messageIndex 始终与服务端保持连续。
+                    playerDead = false
                 }
                 else -> Unit
             }
@@ -420,6 +426,7 @@ class MinecraftClient(
             val ack = ctx.alloc().buffer().writeVarInt(sbId)
             ctx.writeAndFlush(ack)
             chatSessionReported = false
+            playerDead = false
             latestCommandSuggestionInput = ""
             _commandSuggestions.value = CommandSuggestions.Empty
             phase = Phase.CONFIGURATION

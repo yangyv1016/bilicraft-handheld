@@ -61,6 +61,7 @@ class UiConfigRepository(context: Context) {
     private val toolsFile = File(context.filesDir, "ui_tools.json")
     private val preferencesFile = File(context.filesDir, "ui_preferences.json")
     private val officialSigningMigrationFile = File(context.filesDir, "ui_official_server_signing_v1.migrated")
+    private val railwayToolMigrationFile = File(context.filesDir, "ui_railway_tool_v1.migrated")
 
     private val _servers = MutableStateFlow<List<ServerConfig>>(emptyList())
     val servers: StateFlow<List<ServerConfig>> = _servers.asStateFlow()
@@ -79,7 +80,8 @@ class UiConfigRepository(context: Context) {
                 if (normalized != servers) saveList(serverFile, normalized)
             }
         }
-        _tools.value = loadList(toolsFile) ?: defaultTools().also { saveList(toolsFile, it) }
+        val loadedTools = loadList<QuickToolLink>(toolsFile) ?: defaultTools().also { saveList(toolsFile, it) }
+        _tools.value = migrateRailwayTool(loadedTools)
         _preferences.value = loadValue(preferencesFile) ?: UiPreferences().also { saveValue(preferencesFile, it) }
     }
 
@@ -208,6 +210,35 @@ class UiConfigRepository(context: Context) {
         return next
     }
 
+    /**
+     * 一次性补入铁路实时线路图。迁移标记写入后尊重用户删除，不会在后续启动强制恢复。
+     * 已通过 id 或 URL 存在时只写迁移标记，避免用户手动添加过同一网站后出现重复项。
+     */
+    private fun migrateRailwayTool(tools: List<QuickToolLink>): List<QuickToolLink> {
+        if (railwayToolMigrationFile.exists()) return tools
+        val railway = railwayTool()
+        val alreadyExists = tools.any { it.id == railway.id || it.url.equals(railway.url, ignoreCase = true) }
+        val next = if (alreadyExists) {
+            tools
+        } else {
+            val insertAt = tools.indexOfFirst { it.id == "bilicraft-map" }
+                .takeIf { it >= 0 }
+                ?.plus(1)
+                ?: tools.size
+            tools.take(insertAt) + railway + tools.drop(insertAt)
+        }
+        saveList(toolsFile, next)
+        railwayToolMigrationFile.writeText("done")
+        return next
+    }
+
+    private fun railwayTool() = QuickToolLink(
+        id = RAILWAY_TOOL_ID,
+        title = "铁路实时线路图",
+        url = RAILWAY_TOOL_URL,
+        description = "帕拉伦铁路实时线路与列车位置"
+    )
+
     private fun defaultServers(): List<ServerConfig> = listOf(
         ServerConfig(
             id = OFFICIAL_SERVER_ID,
@@ -227,6 +258,7 @@ class UiConfigRepository(context: Context) {
             url = "https://map.bilicraft.com/s2/hyperion/#",
             description = "碧玺服务器在线地图"
         ),
+        railwayTool(),
         QuickToolLink(
             id = "bilicraft-wiki",
             title = "Wiki",
@@ -243,5 +275,7 @@ class UiConfigRepository(context: Context) {
 
     private companion object {
         const val OFFICIAL_SERVER_ID = "bilicraft-official-main"
+        const val RAILWAY_TOOL_ID = "paralun-railway-map"
+        const val RAILWAY_TOOL_URL = "https://railwaymap.big-brother.top/"
     }
 }

@@ -4,10 +4,12 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.ViewGroup
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -93,6 +95,7 @@ class WebViewActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        CookieManager.getInstance().flush()
         webView?.onPause()
         webView?.pauseTimers()
         super.onPause()
@@ -121,15 +124,22 @@ class WebViewActivity : ComponentActivity() {
         savedState: Bundle?,
         onProgress: (Int) -> Unit,
         onRendererGone: () -> Unit
-    ): WebView = WebView(this).apply {
+    ): WebView = WebView(this).apply webView@ {
         layoutParams = ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         )
         settings.javaScriptEnabled = true
+        settings.javaScriptCanOpenWindowsAutomatically = true
         settings.domStorageEnabled = true
         settings.useWideViewPort = true
         settings.loadWithOverviewMode = true
+        CookieManager.getInstance().apply {
+            setAcceptCookie(true)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                setAcceptThirdPartyCookies(this@webView, true)
+            }
+        }
         webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                 onProgress(newProgress)
@@ -143,14 +153,11 @@ class WebViewActivity : ComponentActivity() {
             @Suppress("DEPRECATION")
             override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                 val target = url?.takeIf { it.isNotBlank() } ?: return false
-                view?.loadUrl(target) ?: return false
-                return true
+                return handleNonWebNavigation(view, Uri.parse(target))
             }
 
-            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                view.loadUrl(request.url.toString())
-                return true
-            }
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
+                handleNonWebNavigation(view, request.url)
 
             @RequiresApi(Build.VERSION_CODES.O)
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
@@ -165,7 +172,28 @@ class WebViewActivity : ComponentActivity() {
         if (savedState != null) restoreState(savedState) else if (url.isNotBlank()) loadUrl(url)
     }
 
+    private fun handleNonWebNavigation(view: WebView?, uri: Uri): Boolean {
+        val scheme = uri.scheme?.lowercase()
+        if (scheme in WEBVIEW_SCHEMES) return false
+
+        val externalIntent = runCatching {
+            if (scheme == "intent") Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME)
+            else Intent(Intent.ACTION_VIEW, uri)
+        }.getOrNull() ?: return false
+
+        return runCatching {
+            startActivity(externalIntent)
+            true
+        }.getOrElse {
+            externalIntent.getStringExtra("browser_fallback_url")
+                ?.takeIf { fallback -> fallback.startsWith("https://") || fallback.startsWith("http://") }
+                ?.let { fallback -> view?.loadUrl(fallback); true }
+                ?: false
+        }
+    }
+
     companion object {
+        private val WEBVIEW_SCHEMES = setOf("http", "https", "about", "javascript", "data", "blob")
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_URL = "url"
         private const val KEY_WEBVIEW_STATE = "webview_state"

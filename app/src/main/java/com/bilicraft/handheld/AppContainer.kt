@@ -1,5 +1,6 @@
 package com.bilicraft.handheld
 
+import android.app.Application
 import android.content.Context
 import com.bilicraft.handheld.appicon.AppIconManager
 import com.bilicraft.handheld.auth.AuthClient
@@ -8,7 +9,9 @@ import com.bilicraft.handheld.cdk.CdkRepository
 import com.bilicraft.handheld.config.UiConfigRepository
 import com.bilicraft.handheld.externalplugin.ExternalPluginManager
 import com.bilicraft.handheld.pluginmarket.OfficialPluginMarketRepository
+import com.bilicraft.handheld.power.AppVisibilityTracker
 import com.bilicraft.handheld.protocol.MinecraftTranslations
+import com.bilicraft.handheld.service.ConnectionHandoffStore
 import com.bilicraft.handheld.session.SessionController
 import com.bilicraft.handheld.storage.SecureStore
 import com.bilicraft.handheld.update.UpdateClient
@@ -46,6 +49,10 @@ object AppContainer {
         private set
     lateinit var cdkRepository: CdkRepository
         private set
+    lateinit var connectionHandoffStore: ConnectionHandoffStore
+        private set
+    lateinit var appVisibility: AppVisibilityTracker
+        private set
 
     fun init(context: Context) {
         if (initialized) return
@@ -69,6 +76,8 @@ object AppContainer {
             externalPluginManager = ExternalPluginManager(app, session)
             officialPluginMarket = OfficialPluginMarketRepository(app, externalPluginManager)
             cdkRepository = CdkRepository(app)
+            connectionHandoffStore = ConnectionHandoffStore(app)
+            appVisibility = AppVisibilityTracker.install(app as Application)
             initialized = true
         }
     }

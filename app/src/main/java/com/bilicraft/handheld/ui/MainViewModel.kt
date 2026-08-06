@@ -1,8 +1,11 @@
 package com.bilicraft.handheld.ui
 
 import android.app.Application
+import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.bilicraft.handheld.AppContainer
@@ -117,6 +120,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _activeExternalPluginPanel = MutableStateFlow<ActiveExternalPluginPanel?>(null)
     val activeExternalPluginPanel: StateFlow<ActiveExternalPluginPanel?> = _activeExternalPluginPanel.asStateFlow()
 
+    private val _ignoringBatteryOptimizations = MutableStateFlow(false)
+    val ignoringBatteryOptimizations: StateFlow<Boolean> = _ignoringBatteryOptimizations.asStateFlow()
+
     private var loginJob: Job? = null
 
     val currentAccountName: String
@@ -155,6 +161,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         refreshVersions(silent = true)
+        refreshBatteryOptimizationState()
     }
 
     fun consumeUiMessage() {
@@ -251,6 +258,66 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 session.requestCommandSuggestions("")
             }
             _uiMessage.value = if (enabled) "命令补全已开启" else "命令补全已关闭"
+        }
+    }
+
+    fun setBackgroundLowPowerEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            uiConfigRepo.setBackgroundLowPowerEnabled(enabled)
+            _uiMessage.value = if (enabled) {
+                "低能耗挂后台已开启，退到后台或息屏后生效"
+            } else {
+                "低能耗挂后台已关闭，后台将保持全功率连接"
+            }
+        }
+    }
+
+    /** 电池优化白名单状态。跳转系统页面后无回调，靠回到设置页时重新查询刷新。 */
+    fun refreshBatteryOptimizationState() {
+        _ignoringBatteryOptimizations.value = queryIgnoringBatteryOptimizations()
+    }
+
+    /**
+     * 拉起系统的电池优化白名单授权。
+     * 部分 ROM 阉割了直接申请入口，此时退回到电池优化设置列表让用户手动选。
+     */
+    fun requestIgnoreBatteryOptimizations() {
+        val ctx = getApplication<Application>()
+        if (queryIgnoringBatteryOptimizations()) {
+            refreshBatteryOptimizationState()
+            return
+        }
+        val direct = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = Uri.parse("package:${ctx.packageName}")
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        val fallback = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        val launched = runCatching { ctx.startActivity(direct) }.isSuccess ||
+            runCatching { ctx.startActivity(fallback) }.isSuccess
+        if (!launched) _uiMessage.value = "当前系统未提供电池优化设置入口，请在系统设置中手动放行"
+    }
+
+    private fun queryIgnoringBatteryOptimizations(): Boolean {
+        val ctx = getApplication<Application>()
+        val pm = ctx.getSystemService(PowerManager::class.java) ?: return false
+        return pm.isIgnoringBatteryOptimizations(ctx.packageName)
+    }
+
+    /**
+     * 打开系统的应用详情页，让用户自行放开厂商后台限制。
+     * 自启动、后台锁定这类开关都在厂商私有页面里，没有公开 API 可直接跳转，
+     * 应用详情页是唯一在各家 ROM 都能落地的标准入口。
+     */
+    fun openAppDetailsSettings() {
+        val ctx = getApplication<Application>()
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.parse("package:${ctx.packageName}")
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        if (runCatching { ctx.startActivity(intent) }.isFailure) {
+            _uiMessage.value = "无法打开应用详情页，请在系统设置中手动查找本应用"
         }
     }
 

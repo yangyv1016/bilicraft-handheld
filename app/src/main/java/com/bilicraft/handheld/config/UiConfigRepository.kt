@@ -53,7 +53,8 @@ data class UiPreferences(
     val chatAutoScroll: Boolean = true,
     val commandCompletionEnabled: Boolean = true,
     val downloadSource: DownloadSource = DownloadSource.DEFAULT,
-    val themeMode: ThemeMode = ThemeMode.System
+    val themeMode: ThemeMode = ThemeMode.System,
+    val backgroundLowPowerEnabled: Boolean = false
 )
 
 /**
@@ -107,6 +108,12 @@ class UiConfigRepository(context: Context) {
 
     suspend fun setDownloadSource(source: DownloadSource) = withContext(Dispatchers.IO) {
         val next = _preferences.value.copy(downloadSource = source)
+        _preferences.value = next
+        saveValue(preferencesFile, next)
+    }
+
+    suspend fun setBackgroundLowPowerEnabled(enabled: Boolean) = withContext(Dispatchers.IO) {
+        val next = _preferences.value.copy(backgroundLowPowerEnabled = enabled)
         _preferences.value = next
         saveValue(preferencesFile, next)
     }

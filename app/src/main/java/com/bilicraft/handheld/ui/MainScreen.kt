@@ -112,6 +112,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bilicraft.handheld.appicon.AppIcon
 import com.bilicraft.handheld.cdk.CdkEntry
@@ -933,10 +934,12 @@ private fun SettingsScreen(vm: MainViewModel) {
     val accountList by vm.accounts.collectAsStateWithLifecycle()
     val updateState by vm.updateState.collectAsStateWithLifecycle()
     val cdkState by vm.cdkState.collectAsStateWithLifecycle()
+    val ignoringBatteryOptimizations by vm.ignoringBatteryOptimizations.collectAsStateWithLifecycle()
     var removingAccountUuid by remember { mutableStateOf<String?>(null) }
     var showSourcePicker by remember { mutableStateOf(false) }
     var showThemePicker by remember { mutableStateOf(false) }
     var showIconPicker by remember { mutableStateOf(false) }
+    var showBackgroundLimitGuide by remember { mutableStateOf(false) }
     val currentAppIcon by vm.currentAppIcon.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
@@ -944,6 +947,12 @@ private fun SettingsScreen(vm: MainViewModel) {
             vm.refreshCdkActiveWindow()
             delay(CDK_ACTIVE_WINDOW_REFRESH_MS)
         }
+    }
+
+    // 系统电池优化授权没有回调，只能在回到本页时重新查询。
+    LifecycleResumeEffect(Unit) {
+        vm.refreshBatteryOptimizationState()
+        onPauseOrDispose { }
     }
 
     if (showIconPicker) {
@@ -1008,6 +1017,58 @@ private fun SettingsScreen(vm: MainViewModel) {
                     Switch(
                         checked = preferences.commandCompletionEnabled,
                         onCheckedChange = vm::setCommandCompletionEnabled
+                    )
+                }
+            )
+        }
+
+        item { SectionTitle("后台保活") }
+        item {
+            ListItem(
+                headlineContent = { Text("忽略电池优化") },
+                supportingContent = {
+                    Text(
+                        if (ignoringBatteryOptimizations) {
+                            "已加入白名单，系统省电策略不会清理后台连接。"
+                        } else {
+                            "未加入白名单。息屏一段时间后，系统可能直接掐断后台连接。点击前往授权。"
+                        }
+                    )
+                },
+                leadingContent = { Icon(Icons.Default.Lock, contentDescription = null) },
+                trailingContent = {
+                    if (ignoringBatteryOptimizations) {
+                        Icon(Icons.Default.Check, contentDescription = null)
+                    } else {
+                        Icon(Icons.Default.ChevronRight, contentDescription = null)
+                    }
+                },
+                modifier = Modifier.clickable(enabled = !ignoringBatteryOptimizations) {
+                    vm.requestIgnoreBatteryOptimizations()
+                }
+            )
+        }
+        item {
+            ListItem(
+                headlineContent = { Text("厂商后台限制") },
+                supportingContent = {
+                    Text("小米、华为、荣耀、OPPO、vivo 等系统还有自启动与后台锁定开关，未放开时仍可能被清理。查看各系统的设置位置。")
+                },
+                leadingContent = { Icon(Icons.Default.Settings, contentDescription = null) },
+                trailingContent = { Icon(Icons.Default.ChevronRight, contentDescription = null) },
+                modifier = Modifier.clickable { showBackgroundLimitGuide = true }
+            )
+        }
+        item {
+            ListItem(
+                headlineContent = { Text("低能耗挂后台") },
+                supportingContent = {
+                    Text("退到后台或息屏时释放 CPU 唤醒锁并降低通知刷新频率，明显省电；代价是掉线概率略增，掉线后仍会自动重连。")
+                },
+                trailingContent = {
+                    Switch(
+                        checked = preferences.backgroundLowPowerEnabled,
+                        onCheckedChange = vm::setBackgroundLowPowerEnabled
                     )
                 }
             )
@@ -1090,6 +1151,16 @@ private fun SettingsScreen(vm: MainViewModel) {
         )
     }
 
+    if (showBackgroundLimitGuide) {
+        BackgroundLimitGuideDialog(
+            onOpenAppDetails = {
+                vm.openAppDetailsSettings()
+                showBackgroundLimitGuide = false
+            },
+            onDismiss = { showBackgroundLimitGuide = false }
+        )
+    }
+
     if (showThemePicker) {
         AlertDialog(
             onDismissRequest = { showThemePicker = false },
@@ -1148,6 +1219,54 @@ private fun SettingsScreen(vm: MainViewModel) {
             }
         )
     }
+}
+
+/**
+ * 厂商后台限制说明。
+ *
+ * 自启动、后台锁定这些开关都在各家 ROM 的私有页面里，没有公开 API 可以查询或代为开启，
+ * 因此这里只给路径说明，跳转统一落到标准的应用详情页。
+ */
+@Composable
+private fun BackgroundLimitGuideDialog(
+    onOpenAppDetails: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+        title = { Text("厂商后台限制") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "「忽略电池优化」只解除 Android 原生限制。国内厂商系统另有一套后台管控，需要在系统设置里手动放开：",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                BACKGROUND_LIMIT_STEPS.forEach { (vendor, path) ->
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(vendor, style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            path,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Text(
+                    "另外建议在最近任务列表里给本应用加锁，避免一键清理时被关掉。各系统菜单名称可能随版本变化，找不到时按关键词搜索即可。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onOpenAppDetails) { Text("打开应用详情") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("知道了") } }
+    )
 }
 
 @Composable
@@ -1780,6 +1899,21 @@ private const val COMMAND_COMPLETION_DEBOUNCE_MS = 200L
 private const val CDK_ACTIVE_WINDOW_REFRESH_MS = 60_000L
 private const val CDK_COPY_FEEDBACK_MS = 1_600L
 private const val MAX_VISIBLE_COMMAND_SUGGESTIONS = 6
+
+private val BACKGROUND_LIMIT_STEPS = listOf(
+    "小米 / Redmi（HyperOS、MIUI）" to
+        "设置 → 应用设置 → 应用管理 → 掌上碧玺 → 开启「自启动」，并把「省电策略」改为「无限制」",
+    "华为（HarmonyOS、EMUI）" to
+        "设置 → 应用和服务 → 应用启动管理 → 掌上碧玺 → 关闭自动管理，允许「后台活动」",
+    "荣耀（MagicOS）" to
+        "设置 → 应用和服务 → 应用启动管理 → 掌上碧玺 → 关闭自动管理，允许「自启动」与「关联启动」",
+    "OPPO / 一加 / realme（ColorOS）" to
+        "设置 → 电池 → 应用耗电管理 → 掌上碧玺 → 允许「后台运行」与「自启动」",
+    "vivo / iQOO（OriginOS、Funtouch）" to
+        "设置 → 电池 → 后台耗电管理 → 掌上碧玺 → 允许「后台高耗电」，并在应用管理里开启自启动",
+    "三星（One UI）" to
+        "设置 → 电池 → 后台使用限制 → 把掌上碧玺加入「从不休眠的应用」"
+)
 
 private fun ChatEvent.toAnnotated(): AnnotatedString {
     if (spans.isEmpty()) return AnnotatedString(plainText)

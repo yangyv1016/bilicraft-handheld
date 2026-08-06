@@ -96,8 +96,31 @@ class SessionController(
         }
     }
 
+    /** 是否存在一个未被用户停止的连接目标（网络恢复等外部信号据此判断能否重连）。 */
+    val hasActiveRequest: Boolean
+        get() = activeRequest != null
+
     /** 启动连接。version 为「自动识别」时先 ping 拿协议号。 */
     fun start(serverId: String?, address: ServerAddress, version: McVersion, mode: ChatSigningMode) {
+        launchRequest(serverId, address, version, mode)
+    }
+
+    /**
+     * 立刻重连当前目标（网络恢复等外部信号触发）。
+     * 重新发起请求而不是复用退避链：退避次数归零，也顺带解除 MAX_RECONNECT 之后的停止状态。
+     */
+    fun retryNow() {
+        val request = activeRequest ?: return
+        if (_connState.value is ConnectionState.Connected) return
+        launchRequest(request.serverId, request.address, request.version, request.signingMode)
+    }
+
+    private fun launchRequest(
+        serverId: String?,
+        address: ServerAddress,
+        version: McVersion,
+        mode: ChatSigningMode
+    ) {
         reconnectAllowed = false
         reconnectJob?.cancel()
         pumpJob?.cancel()

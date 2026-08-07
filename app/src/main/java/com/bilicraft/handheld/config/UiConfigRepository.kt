@@ -48,12 +48,20 @@ enum class ThemeMode(val displayName: String) {
     Dark("深色")
 }
 
+/** 插件功能面板列表布局：居中（文档式居中）或靠上（原列表顶对齐）。 */
+@Serializable
+enum class PluginPanelLayout {
+    Center,
+    Top
+}
+
 @Serializable
 data class UiPreferences(
     val chatAutoScroll: Boolean = true,
     val commandCompletionEnabled: Boolean = true,
     val downloadSource: DownloadSource = DownloadSource.DEFAULT,
-    val themeMode: ThemeMode = ThemeMode.System
+    val themeMode: ThemeMode = ThemeMode.System,
+    val pluginPanelLayout: PluginPanelLayout = PluginPanelLayout.Top
 )
 
 /**
@@ -113,6 +121,12 @@ class UiConfigRepository(context: Context) {
 
     suspend fun setThemeMode(themeMode: ThemeMode) = withContext(Dispatchers.IO) {
         val next = _preferences.value.copy(themeMode = themeMode)
+        _preferences.value = next
+        saveValue(preferencesFile, next)
+    }
+
+    suspend fun setPluginPanelLayout(layout: PluginPanelLayout) = withContext(Dispatchers.IO) {
+        val next = _preferences.value.copy(pluginPanelLayout = layout)
         _preferences.value = next
         saveValue(preferencesFile, next)
     }

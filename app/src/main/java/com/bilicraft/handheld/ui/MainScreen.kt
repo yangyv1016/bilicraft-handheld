@@ -4,11 +4,17 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +24,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -34,9 +41,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
@@ -50,6 +60,8 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.VerticalAlignCenter
+import androidx.compose.material.icons.filled.VerticalAlignTop
 import androidx.compose.material.icons.filled.Web
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -76,6 +88,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -116,6 +129,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bilicraft.handheld.appicon.AppIcon
 import com.bilicraft.handheld.cdk.CdkEntry
 import com.bilicraft.handheld.cdk.CdkState
+import com.bilicraft.handheld.config.PluginPanelLayout
 import com.bilicraft.handheld.config.QuickToolLink
 import com.bilicraft.handheld.config.ServerConfig
 import com.bilicraft.handheld.config.ThemeMode
@@ -268,91 +282,105 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
     var editingServer by remember { mutableStateOf<ServerConfig?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var menuServer by remember { mutableStateOf<ServerConfig?>(null) }
-    var showPluginEntrypoints by remember { mutableStateOf(false) }
+    var pluginMenuExpanded by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(servers.size) {
         selectedIndex = selectedIndex.coerceIn(0, (servers.size - 1).coerceAtLeast(0))
     }
 
-    Column(Modifier.fillMaxSize()) {
-        if (servers.isEmpty()) {
-            EmptyState(
-                title = "还没有服务器配置",
-                message = "可新增服务器。默认配置来自 UI 配置仓库，用户删除后不会强制恢复。",
-                actionText = "新增服务器",
-                onAction = { showCreateDialog = true }
-            )
-        } else {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                ScrollableTabRow(
-                    selectedTabIndex = selectedIndex,
-                    edgePadding = 0.dp,
-                    modifier = Modifier.weight(1f)
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            if (servers.isEmpty()) {
+                EmptyState(
+                    title = "还没有服务器配置",
+                    message = "可新增服务器。默认配置来自 UI 配置仓库，用户删除后不会强制恢复。",
+                    actionText = "新增服务器",
+                    onAction = { showCreateDialog = true }
+                )
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    servers.forEachIndexed { index, server ->
-                        Tab(
-                            selected = selectedIndex == index,
-                            onClick = { selectedIndex = index },
-                            text = {
-                                Text(
-                                    server.name,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.combinedClickable(
-                                        onClick = { selectedIndex = index },
-                                        onLongClick = { menuServer = server }
+                    ScrollableTabRow(
+                        selectedTabIndex = selectedIndex,
+                        edgePadding = 0.dp,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        servers.forEachIndexed { index, server ->
+                            Tab(
+                                selected = selectedIndex == index,
+                                onClick = { selectedIndex = index },
+                                text = {
+                                    Text(
+                                        server.name,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.combinedClickable(
+                                            onClick = { selectedIndex = index },
+                                            onLongClick = { menuServer = server }
+                                        )
                                     )
-                                )
-                            }
+                                }
+                            )
+                        }
+                    }
+                    val currentServerId = servers.getOrNull(selectedIndex)?.id
+                    val currentConnected = currentServerId != null &&
+                        runtime.connectionStates[currentServerId] is ConnectionState.Connected
+                    IconButton(
+                        onClick = { vm.respawn() },
+                        enabled = currentConnected
+                    ) {
+                        Icon(Icons.Default.Favorite, contentDescription = "复活")
+                    }
+                    IconButton(onClick = { showCreateDialog = true }) {
+                        Icon(Icons.Default.Add, contentDescription = "新增服务器")
+                    }
+                }
+
+                val selectedServer = servers.getOrNull(selectedIndex)
+                if (selectedServer != null) {
+                    val selectedConn = runtime.connectionStates[selectedServer.id] ?: ConnectionState.Disconnected
+                    val selectedLog = runtime.chatLogs[selectedServer.id].orEmpty()
+                    val isActiveServer = runtime.activeServerId == selectedServer.id
+                    serverSessionStateHolder.SaveableStateProvider(selectedServer.id) {
+                        ServerSessionPage(
+                            server = selectedServer,
+                            conn = selectedConn,
+                            log = selectedLog,
+                            isActiveServer = isActiveServer,
+                            chatAutoScroll = preferences.chatAutoScroll,
+                            commandCompletionEnabled = preferences.commandCompletionEnabled,
+                            commandSuggestions = commandSuggestions,
+                            onConnect = { vm.connect(selectedServer) },
+                            onStop = vm::stopConnection,
+                            onSend = { vm.sendChat(selectedServer.id, it) },
+                            onRequestCommandSuggestions = { vm.requestCommandSuggestions(selectedServer.id, it) },
+                            onEdit = { editingServer = selectedServer }
                         )
                     }
                 }
-                IconButton(
-                    onClick = { showPluginEntrypoints = true },
-                    enabled = pluginEntrypoints.isNotEmpty()
-                ) {
-                    Icon(Icons.Default.Build, contentDescription = "插件入口")
-                }
-                val currentServerId = servers.getOrNull(selectedIndex)?.id
-                val currentConnected = currentServerId != null &&
-                    runtime.connectionStates[currentServerId] is ConnectionState.Connected
-                IconButton(
-                    onClick = { vm.respawn() },
-                    enabled = currentConnected
-                ) {
-                    Icon(Icons.Default.Favorite, contentDescription = "复活")
-                }
-                IconButton(onClick = { showCreateDialog = true }) {
-                    Icon(Icons.Default.Add, contentDescription = "新增服务器")
-                }
-            }
-
-            val selectedServer = servers.getOrNull(selectedIndex)
-            if (selectedServer != null) {
-                val selectedConn = runtime.connectionStates[selectedServer.id] ?: ConnectionState.Disconnected
-                val selectedLog = runtime.chatLogs[selectedServer.id].orEmpty()
-                val isActiveServer = runtime.activeServerId == selectedServer.id
-                serverSessionStateHolder.SaveableStateProvider(selectedServer.id) {
-                    ServerSessionPage(
-                        server = selectedServer,
-                        conn = selectedConn,
-                        log = selectedLog,
-                        isActiveServer = isActiveServer,
-                        chatAutoScroll = preferences.chatAutoScroll,
-                        commandCompletionEnabled = preferences.commandCompletionEnabled,
-                        commandSuggestions = commandSuggestions,
-                        onConnect = { vm.connect(selectedServer) },
-                        onStop = vm::stopConnection,
-                        onSend = { vm.sendChat(selectedServer.id, it) },
-                        onRequestCommandSuggestions = { vm.requestCommandSuggestions(selectedServer.id, it) },
-                        onEdit = { editingServer = selectedServer }
-                    )
-                }
             }
         }
+
+        PluginEntrypointSidePanel(
+            expanded = pluginMenuExpanded,
+            entrypoints = pluginEntrypoints,
+            layout = preferences.pluginPanelLayout,
+            onLayoutChange = vm::setPluginPanelLayout,
+            onOpen = { entry ->
+                pluginMenuExpanded = false
+                vm.openExternalPluginEntrypoint(entry.pluginId, entry.entrypointId)
+            },
+            onDismiss = { pluginMenuExpanded = false }
+        )
+
+        PluginEntrypointEdgeToggle(
+            expanded = pluginMenuExpanded,
+            onToggle = { pluginMenuExpanded = !pluginMenuExpanded },
+            modifier = Modifier.align(Alignment.CenterEnd)
+        )
     }
 
     if (showCreateDialog) {
@@ -413,17 +441,6 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
                     TextButton(onClick = { menuServer = null }) { Text("取消") }
                 }
             }
-        )
-    }
-
-    if (showPluginEntrypoints) {
-        PluginEntrypointPickerDialog(
-            entrypoints = pluginEntrypoints,
-            onOpen = { entry ->
-                showPluginEntrypoints = false
-                vm.openExternalPluginEntrypoint(entry.pluginId, entry.entrypointId)
-            },
-            onDismiss = { showPluginEntrypoints = false }
         )
     }
 }
@@ -620,47 +637,213 @@ private fun statusColor(state: ConnectionState): Color = when (state) {
 }
 
 @Composable
-private fun PluginEntrypointPickerDialog(
+private fun PluginEntrypointEdgeToggle(
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = onToggle,
+        modifier = modifier
+            .padding(vertical = 8.dp)
+            .height(96.dp)
+            .width(28.dp),
+        shape = RoundedCornerShape(topStart = 14.dp, bottomStart = 14.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        tonalElevation = 3.dp,
+        shadowElevation = 4.dp
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    imageVector = Icons.Default.Build,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.height(4.dp))
+                Icon(
+                    imageVector = if (expanded) {
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight
+                    } else {
+                        Icons.AutoMirrored.Filled.KeyboardArrowLeft
+                    },
+                    contentDescription = if (expanded) "收起插件菜单" else "展开插件菜单",
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PluginEntrypointCard(
+    entry: ExternalPluginEntrypoint,
+    onOpen: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = entry.title.ifBlank { entry.pluginName },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            val subtitle = buildList {
+                if (entry.title.isNotBlank() && entry.pluginName.isNotBlank()) {
+                    add(entry.pluginName)
+                }
+                entry.description.takeIf { it.isNotBlank() }?.let(::add)
+            }.joinToString(" · ")
+            if (subtitle.isNotBlank()) {
+                Text(
+                    text = subtitle,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PluginEntrypointSidePanel(
+    expanded: Boolean,
     entrypoints: List<ExternalPluginEntrypoint>,
+    layout: PluginPanelLayout,
+    onLayoutChange: (PluginPanelLayout) -> Unit,
     onOpen: (ExternalPluginEntrypoint) -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("插件入口") },
-        text = {
-            if (entrypoints.isEmpty()) {
-                Text("当前没有可用插件入口。请先在“插件管理”中安装并启用插件。")
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    entrypoints.forEach { entry ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onOpen(entry) },
-                            shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant
-                            )
+    if (expanded) {
+        BackHandler(onBack = onDismiss)
+    }
+
+    AnimatedVisibility(
+        visible = expanded,
+        enter = fadeIn(),
+        exit = fadeOut()
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.35f))
+                .clickable(onClick = onDismiss)
+        )
+    }
+
+    AnimatedVisibility(
+        visible = expanded,
+        enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
+        exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
+        modifier = Modifier.fillMaxSize()
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(0.82f)
+                    // 吞掉面板上的点击，避免穿透到背后遮罩触发关闭。
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {}
+                    ),
+                tonalElevation = 6.dp,
+                shadowElevation = 8.dp,
+                color = MaterialTheme.colorScheme.surface
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "插件功能",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        val switchToCenter = layout == PluginPanelLayout.Top
+                        IconButton(
+                            onClick = {
+                                onLayoutChange(
+                                    if (switchToCenter) PluginPanelLayout.Center else PluginPanelLayout.Top
+                                )
+                            }
                         ) {
+                            Icon(
+                                imageVector = if (switchToCenter) {
+                                    Icons.Default.VerticalAlignCenter
+                                } else {
+                                    Icons.Default.VerticalAlignTop
+                                },
+                                contentDescription = if (switchToCenter) {
+                                    "切换为居中排列"
+                                } else {
+                                    "切换为靠上排列"
+                                }
+                            )
+                        }
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, contentDescription = "关闭插件菜单")
+                        }
+                    }
+                    HorizontalDivider()
+                    val topAligned = layout == PluginPanelLayout.Top
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        contentAlignment = if (topAligned) Alignment.TopCenter else Alignment.Center
+                    ) {
+                        if (entrypoints.isEmpty()) {
                             Text(
-                                text = entry.pluginName,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.SemiBold,
+                                text = "当前没有可用插件入口。请先在“插件管理”中安装并启用插件。",
+                                modifier = Modifier.padding(top = if (topAligned) 12.dp else 0.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 14.dp, vertical = 12.dp)
-                            )
+                                    .padding(top = if (topAligned) 12.dp else 0.dp)
+                                    .verticalScroll(rememberScrollState()),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                entrypoints.forEach { entry ->
+                                    PluginEntrypointCard(
+                                        entry = entry,
+                                        onOpen = { onOpen(entry) }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
-    )
+        }
+    }
 }
 
 @Composable

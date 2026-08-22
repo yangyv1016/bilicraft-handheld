@@ -359,6 +359,36 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         session.sendChat(text)
     }
 
+    /** 领取列表中的单个兑换码。 */
+    fun claimCdk(code: String) {
+        claimCdks(listOf(code))
+    }
+
+    /** 领取用户输入的单个兑换码。允许用户顺手输入前导斜杠。 */
+    fun claimCustomCdk(code: String) {
+        claimCdks(listOf(code))
+    }
+
+    private fun claimCdks(codes: List<String>) {
+        val activeId = _serverRuntime.value.activeServerId
+        if (activeId == null || _serverRuntime.value.connectionStates[activeId] !is ConnectionState.Connected) {
+            _uiMessage.value = "请先连接服务器，再领取兑换码"
+            return
+        }
+        val normalized = codes
+            .asSequence()
+            .map { it.trim().removePrefix("/").trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .toList()
+        if (normalized.isEmpty()) {
+            _uiMessage.value = "请输入兑换码"
+            return
+        }
+        normalized.forEach { session.sendChat("/$it") }
+        _uiMessage.value = "兑换码已提交，请留意游戏内提示"
+    }
+
     fun respawn() {
         val activeId = _serverRuntime.value.activeServerId
         if (activeId == null || _serverRuntime.value.connectionStates[activeId] !is ConnectionState.Connected) {

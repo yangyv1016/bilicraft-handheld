@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -67,6 +68,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
@@ -91,7 +93,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -99,6 +101,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
@@ -446,6 +449,7 @@ private fun ServerSessionPage(
     val connected = isActiveServer && conn is ConnectionState.Connected
     val connecting = isActiveServer && conn !is ConnectionState.Disconnected && conn !is ConnectionState.Failed
     var input by remember(server.id) { mutableStateOf(TextFieldValue("")) }
+    var showAllSuggestions by rememberSaveable(server.id) { mutableStateOf(false) }
 
     LaunchedEffect(input.text, connected, commandCompletionEnabled) {
         if (!connected || !commandCompletionEnabled || !input.text.startsWith("/")) {
@@ -454,6 +458,16 @@ private fun ServerSessionPage(
         }
         delay(COMMAND_COMPLETION_DEBOUNCE_MS)
         onRequestCommandSuggestions(input.text)
+    }
+
+    val visibleSuggestions = commandSuggestions.takeIf {
+        connected && commandCompletionEnabled && it.requestInput == input.text && it.hasSuggestions
+    }
+    val expandedSuggestions = visibleSuggestions?.takeIf {
+        it.suggestions.size > MAX_VISIBLE_COMMAND_SUGGESTIONS
+    }
+    LaunchedEffect(expandedSuggestions?.requestId, expandedSuggestions?.requestInput) {
+        if (expandedSuggestions == null) showAllSuggestions = false
     }
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
@@ -470,9 +484,6 @@ private fun ServerSessionPage(
 
         Spacer(Modifier.height(12.dp))
         ChatLog(log = log, autoScroll = chatAutoScroll, modifier = Modifier.weight(1f).fillMaxWidth())
-        val visibleSuggestions = commandSuggestions.takeIf {
-            connected && commandCompletionEnabled && it.requestInput == input.text && it.hasSuggestions
-        }
         if (visibleSuggestions != null) {
             Spacer(Modifier.height(8.dp))
             CommandSuggestionBar(
@@ -480,7 +491,9 @@ private fun ServerSessionPage(
                 onSelect = { suggestion ->
                     val applied = CommandSuggestions.apply(input.text, visibleSuggestions.start, visibleSuggestions.length, suggestion.text)
                     input = TextFieldValue(applied, selection = TextRange(applied.length))
-                }
+                    showAllSuggestions = false
+                },
+                onShowAll = { showAllSuggestions = true }
             )
         }
         Spacer(Modifier.height(8.dp))
@@ -503,6 +516,17 @@ private fun ServerSessionPage(
                 Text("发送")
             }
         }
+    }
+    if (showAllSuggestions && expandedSuggestions != null) {
+        CommandSuggestionSheet(
+            state = expandedSuggestions,
+            onSelect = { suggestion ->
+                val applied = CommandSuggestions.apply(input.text, expandedSuggestions.start, expandedSuggestions.length, suggestion.text)
+                input = TextFieldValue(applied, selection = TextRange(applied.length))
+                showAllSuggestions = false
+            },
+            onDismiss = { showAllSuggestions = false }
+        )
     }
 }
 
@@ -666,23 +690,99 @@ private fun PluginEntrypointPickerDialog(
 @Composable
 private fun CommandSuggestionBar(
     state: CommandSuggestionState,
-    onSelect: (CommandSuggestion) -> Unit
+    onSelect: (CommandSuggestion) -> Unit,
+    onShowAll: () -> Unit
 ) {
-    LazyRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        items(state.suggestions.take(MAX_VISIBLE_COMMAND_SUGGESTIONS)) { suggestion ->
-            AssistChip(
-                onClick = { onSelect(suggestion) },
-                label = {
+    if (state.suggestions.size <= MAX_VISIBLE_COMMAND_SUGGESTIONS) {
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(state.suggestions) { suggestion ->
+                AssistChip(
+                    onClick = { onSelect(suggestion) },
+                    label = {
+                        Text(
+                            text = suggestion.text,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                )
+            }
+        }
+    } else {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onShowAll),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(Modifier.weight(1f)) {
                     Text(
-                        text = suggestion.text,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        text = "找到 ${state.suggestions.size} 个候选",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "点击查看全部命令补全",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
                 }
+                TextButton(onClick = onShowAll) { Text("查看全部") }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CommandSuggestionSheet(
+    state: CommandSuggestionState,
+    onSelect: (CommandSuggestion) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(screenHeight * 0.5f)
+        ) {
+            Text(
+                text = "命令补全（${state.suggestions.size} 个候选）",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
             )
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().fillMaxHeight(),
+                contentPadding = PaddingValues(bottom = 20.dp)
+            ) {
+                items(state.suggestions) { suggestion ->
+                    ListItem(
+                        headlineContent = {
+                            Text(
+                                text = suggestion.text,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
+                        supportingContent = suggestion.tooltip?.let { tooltip ->
+                            { Text(tooltip, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+                        },
+                        modifier = Modifier.clickable { onSelect(suggestion) }
+                    )
+                    HorizontalDivider()
+                }
+            }
         }
     }
 }
@@ -692,20 +792,22 @@ private fun ChatLog(log: List<ChatEvent>, autoScroll: Boolean, modifier: Modifie
     val listState = rememberLazyListState()
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
-    var followLatestMessage by rememberSaveable { mutableStateOf(true) }
+    LaunchedEffect(log.size, log.lastOrNull(), autoScroll) {
+        if (!autoScroll || log.isEmpty()) return@LaunchedEffect
 
-    LaunchedEffect(listState, autoScroll) {
-        snapshotFlow {
-            val lastVisibleItemIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            lastVisibleItemIndex >= listState.layoutInfo.totalItemsCount - 2
-        }.collect { isNearLatestMessage ->
-            followLatestMessage = isNearLatestMessage
-        }
-    }
-    LaunchedEffect(log.lastOrNull(), autoScroll) {
-        if (autoScroll && followLatestMessage && log.isNotEmpty()) {
-            listState.animateScrollToItem(log.lastIndex)
-        }
+        // The effect can run immediately after the log state changes, before the
+        // LazyColumn has measured the newly appended item. Wait until the target
+        // item exists in layoutInfo; otherwise scrollToItem may clamp to the old
+        // last index and never get another trigger.
+        val targetIndex = log.lastIndex
+        snapshotFlow { listState.layoutInfo.totalItemsCount }
+            .first { totalItemsCount -> totalItemsCount >= log.size }
+
+        // The setting is the sole switch: when enabled, every log update follows
+        // the newest item even if the user had manually scrolled away earlier.
+        // Do not animate each item in a burst: each new item would cancel the
+        // previous animation and leave the list somewhere in the middle.
+        listState.scrollToItem(targetIndex)
     }
     LazyColumn(
         state = listState,
@@ -1038,7 +1140,9 @@ private fun SettingsScreen(vm: MainViewModel) {
         item {
             CdkModuleCard(
                 state = cdkState,
-                onRefresh = vm::refreshCdk
+                onRefresh = vm::refreshCdk,
+                onClaim = vm::claimCdk,
+                onClaimCustom = vm::claimCustomCdk
             )
         }
 
@@ -1153,9 +1257,13 @@ private fun SettingsScreen(vm: MainViewModel) {
 @Composable
 private fun CdkModuleCard(
     state: CdkState,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    onClaim: (String) -> Unit,
+    onClaimCustom: (String) -> Unit
 ) {
     val clipboardManager = LocalClipboardManager.current
+    var showCustomCdkDialog by rememberSaveable { mutableStateOf(false) }
+    var customCdk by rememberSaveable { mutableStateOf("") }
 
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
@@ -1164,7 +1272,7 @@ private fun CdkModuleCard(
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("CDK 兑换码", fontWeight = FontWeight.SemiBold)
+                    Text("福利兑换码", fontWeight = FontWeight.SemiBold)
                     Text(
                         "限时福利，记得及时兑换",
                         style = MaterialTheme.typography.bodySmall,
@@ -1178,12 +1286,18 @@ private fun CdkModuleCard(
             if (state.loading) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
+            OutlinedButton(
+                onClick = { showCustomCdkDialog = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("手动输入兑换码")
+            }
             state.errorMessage?.takeIf { it.isNotBlank() }?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
             if (state.entries.isEmpty() && !state.loading) {
                 Text(
-                    "当前没有可兑换的 CDK，稍后再来看看。",
+                    "暂时没有可领取的兑换码，稍后再来看看。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1192,18 +1306,55 @@ private fun CdkModuleCard(
                     if (index > 0) HorizontalDivider()
                     CdkEntryItem(
                         entry = entry,
-                        onCopy = { clipboardManager.setText(AnnotatedString(entry.code)) }
+                        onCopy = { clipboardManager.setText(AnnotatedString(entry.code)) },
+                        onClaim = { onClaim(entry.code) }
                     )
                 }
             }
         }
+    }
+
+    if (showCustomCdkDialog) {
+        AlertDialog(
+            onDismissRequest = { showCustomCdkDialog = false },
+            title = { Text("领取 CDK") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                    "输入兑换码后，确认即可在当前服务器中领取。",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(
+                        value = customCdk,
+                        onValueChange = { customCdk = it },
+                        label = { Text("兑换码") },
+                        placeholder = { Text("请输入兑换码") },
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onClaimCustom(customCdk)
+                        customCdk = ""
+                        showCustomCdkDialog = false
+                    },
+                    enabled = customCdk.trim().removePrefix("/").isNotBlank()
+                ) { Text("领取") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCustomCdkDialog = false }) { Text("取消") }
+            }
+        )
     }
 }
 
 @Composable
 private fun CdkEntryItem(
     entry: CdkEntry,
-    onCopy: () -> Unit
+    onCopy: () -> Unit,
+    onClaim: () -> Unit
 ) {
     var copied by remember(entry.id, entry.code) { mutableStateOf(false) }
 
@@ -1226,11 +1377,16 @@ private fun CdkEntryItem(
         },
         leadingContent = { Icon(Icons.Default.Info, contentDescription = null) },
         trailingContent = {
-            TextButton(onClick = {
-                onCopy()
-                copied = true
-            }) {
-                Text(if (copied) "已复制" else "复制")
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = {
+                    onCopy()
+                    copied = true
+                }) {
+                    Text(if (copied) "已复制" else "复制")
+                }
+                FilledTonalButton(onClick = onClaim) {
+                    Text("领取")
+                }
             }
         }
     )

@@ -74,8 +74,8 @@ class ConnectionService : Service() {
                 AppContainer.session.start(serverId, ServerAddress(host, port), version, mode)
             }
             ACTION_STOP -> {
-                AppContainer.session.stop()
-                stopSelf()
+                stopServiceAndRemoveNotification()
+                return START_NOT_STICKY
             }
         }
         // 被系统杀掉后尝试重建（配合 SessionController 状态恢复）
@@ -128,11 +128,36 @@ class ConnectionService : Service() {
     }
 
     override fun onDestroy() {
+        stopObservers()
+        removeForegroundNotification()
         wakeLock?.let { if (it.isHeld) it.release() }
-        stateJob?.cancel()
-        logJob?.cancel()
         serviceScope.cancel()
         super.onDestroy()
+    }
+
+    /** 最近任务中移除应用时，主动断开并拆除前台通知，避免 OEM 留下孤儿 ongoing 通知。 */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        stopServiceAndRemoveNotification()
+        super.onTaskRemoved(rootIntent)
+    }
+
+    private fun stopServiceAndRemoveNotification() {
+        stopObservers()
+        AppContainer.session.stop()
+        removeForegroundNotification()
+        stopSelf()
+    }
+
+    private fun stopObservers() {
+        stateJob?.cancel()
+        stateJob = null
+        logJob?.cancel()
+        logJob = null
+    }
+
+    private fun removeForegroundNotification() {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        getSystemService(NotificationManager::class.java).cancel(NOTIF_ID)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -176,8 +201,10 @@ class ConnectionService : Service() {
     }
 
     private fun updateNotification(text: String) {
-        (getSystemService(NotificationManager::class.java))
-            .notify(NOTIF_ID, buildNotification(text))
+        // Keep the notification owned by the foreground-service record. Updating
+        // it through NotificationManager.notify() can leave an orphan ongoing
+        // notification on some OEMs after the process is removed.
+        startForeground(NOTIF_ID, buildNotification(text))
     }
 
     companion object {

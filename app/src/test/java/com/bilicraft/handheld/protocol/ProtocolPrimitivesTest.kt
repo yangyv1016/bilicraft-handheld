@@ -127,6 +127,9 @@ class ProtocolPrimitivesTest {
         // 协议 775/776 = 26.1/26.2，MCC 用 Palette261（26.2 沿用 26.1）；值取自 PacketPalette261.cs
         for (protocol in intArrayOf(775, 776)) {
             val palette = PaletteRegistry.forProtocol(protocol)
+            assertEquals(0x00, palette.sbId(PacketKey.SB_CONFIG_CLIENT_INFORMATION))
+            assertEquals(0x06, palette.sbId(PacketKey.SB_CONFIG_RESOURCE_PACK_RESPONSE))
+            assertEquals(PacketKey.CB_CONFIG_RESOURCE_PACK, palette.cbKey(0x09, PacketPhase.CONFIGURATION))
             assertEquals(0x09, palette.sbId(PacketKey.SB_CHAT_MESSAGE))
             assertEquals(0x1C, palette.sbId(PacketKey.SB_KEEP_ALIVE_PLAY))
             assertEquals(0x0A, palette.sbId(PacketKey.SB_CHAT_SESSION_UPDATE))
@@ -154,6 +157,8 @@ class ProtocolPrimitivesTest {
         assertTrue(!palette.hasConfigPhase)
         assertTrue(!palette.chatComponentIsNbt)
         assertNull(palette.sbId(PacketKey.SB_LOGIN_ACK))
+        assertEquals(0x02, palette.sbId(PacketKey.SB_LOGIN_PLUGIN_RESPONSE))
+        assertEquals(PacketKey.CB_LOGIN_PLUGIN_REQUEST, palette.cbKey(0x04, PacketPhase.LOGIN))
     }
 
     // ---- 命令补全：服务器响应解析与输入替换 ----

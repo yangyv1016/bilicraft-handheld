@@ -1,5 +1,6 @@
 package com.bilicraft.handheld.protocol
 
+import android.util.Log
 import io.netty.bootstrap.Bootstrap
 import io.netty.buffer.ByteBuf
 import io.netty.channel.Channel
@@ -11,6 +12,7 @@ import io.netty.channel.nio.NioEventLoopGroup
 import io.netty.channel.socket.nio.NioSocketChannel
 import com.bilicraft.handheld.protocol.McTypes.readByteArray
 import com.bilicraft.handheld.protocol.McTypes.readString
+import com.bilicraft.handheld.protocol.McTypes.readUuid
 import com.bilicraft.handheld.protocol.McTypes.readVarInt
 import com.bilicraft.handheld.protocol.McTypes.uuidFromUndashed
 import com.bilicraft.handheld.protocol.McTypes.writeByteArray
@@ -30,6 +32,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.MediaType.Companion.toMediaType
 import org.json.JSONObject
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import javax.crypto.Cipher
 
 /**
@@ -268,12 +272,22 @@ class MinecraftClient(
     private inner class PacketHandler(
         private val address: ServerAddress
     ) : ChannelInboundHandlerAdapter() {
+        private var setupTimeout: ScheduledFuture<*>? = null
 
         override fun channelActive(ctx: ChannelHandlerContext) {
             channel = ctx.channel()
             playerDead = false
             phase = Phase.HANDSHAKE
             _state.value = ConnectionState.LoggingIn
+            setupTimeout = ctx.executor().schedule({
+                if (phase != Phase.PLAY && ctx.channel().isActive) {
+                    _state.value = ConnectionState.Failed(
+                        "登录超时：服务器在 ${LOGIN_TIMEOUT_SECONDS} 秒内未完成登录，请检查服务器版本或离线登录设置",
+                        retriable = false
+                    )
+                    ctx.close()
+                }
+            }, LOGIN_TIMEOUT_SECONDS, TimeUnit.SECONDS)
 
             // Handshake：声明协议号 + next state=2(login)
             val hs = ctx.alloc().buffer()
@@ -320,13 +334,31 @@ class MinecraftClient(
                     installCompression(ctx, threshold)
                 }
                 PacketKey.CB_ENCRYPTION_REQUEST -> doEncryption(ctx, buf)
+                PacketKey.CB_LOGIN_PLUGIN_REQUEST -> respondToLoginPluginRequest(ctx, buf)
                 PacketKey.CB_LOGIN_SUCCESS -> onLoginSuccess(ctx)
                 PacketKey.CB_LOGIN_DISCONNECT -> failWithServerReason(ctx, buf, "被服务器拒绝", componentIsNbt = false)
-                else -> Unit
+                else -> Log.i(LOG_TAG, "未处理的 LOGIN 包：id=0x${packetId.toString(16)}, bytes=${buf.readableBytes()}")
+            }
+        }
+
+        /**
+         * 客户端不实现 Forge/Velocity 等专用登录扩展，按 vanilla 协议回 accepted=false。
+         * 关键是必须回应 messageId；直接忽略会让等待响应的服务器永久停在登录阶段。
+         */
+        private fun respondToLoginPluginRequest(ctx: ChannelHandlerContext, buf: ByteBuf) {
+            val messageId = buf.readVarInt()
+            val channelName = buf.readString()
+            palette.sbId(PacketKey.SB_LOGIN_PLUGIN_RESPONSE)?.let { responseId ->
+                val response = ctx.alloc().buffer().writeVarInt(responseId)
+                response.writeVarInt(messageId)
+                response.writeBoolean(false)
+                ctx.writeAndFlush(response)
+                Log.i(LOG_TAG, "已拒绝不支持的登录扩展：$channelName")
             }
         }
 
         private fun onLoginSuccess(ctx: ChannelHandlerContext) {
+            Log.i(LOG_TAG, "服务端已确认登录，进入配置阶段")
             if (palette.hasConfigPhase) {
                 // 现代：发送 Login Acknowledged，进入 configuration
                 phase = Phase.CONFIGURATION
@@ -334,8 +366,30 @@ class MinecraftClient(
                     val ack = ctx.alloc().buffer().writeVarInt(it)
                     ctx.writeAndFlush(ack)
                 }
+                sendConfigurationClientInformation(ctx)
             } else {
                 enterPlay(ctx)
+            }
+        }
+
+        /**
+         * 1.20.2+ 服务端可在收到 Client Information 前暂停 configuration。
+         * 字段顺序与 vanilla/MCC 一致；1.21.2+ 末尾增加粒子显示级别。
+         */
+        private fun sendConfigurationClientInformation(ctx: ChannelHandlerContext) {
+            palette.sbId(PacketKey.SB_CONFIG_CLIENT_INFORMATION)?.let { packetId ->
+                val info = ctx.alloc().buffer().writeVarInt(packetId)
+                info.writeString("zh_cn")
+                info.writeByte(8)        // 视距（区块）
+                info.writeVarInt(0)      // 聊天模式：全部显示
+                info.writeBoolean(true)  // 显示聊天颜色
+                info.writeByte(0x7F)     // 显示全部皮肤层
+                info.writeVarInt(1)      // 主手：右手
+                info.writeBoolean(false) // 不启用文本过滤
+                info.writeBoolean(true)  // 允许出现在服务器列表
+                if (protocolNumber >= 768) info.writeVarInt(0) // 粒子：全部
+                ctx.writeAndFlush(info)
+                Log.i(LOG_TAG, "已发送配置阶段 Client Information")
             }
         }
 
@@ -358,6 +412,7 @@ class MinecraftClient(
                         ctx.writeAndFlush(reply)
                     }
                 }
+                PacketKey.CB_CONFIG_RESOURCE_PACK -> respondToConfigurationResourcePack(ctx, buf)
                 PacketKey.CB_CONFIG_FINISH -> {
                     // 确认 config 结束，进入 play
                     palette.sbId(PacketKey.SB_CONFIG_FINISH_ACK)?.let {
@@ -366,9 +421,25 @@ class MinecraftClient(
                     }
                     enterPlay(ctx)
                 }
-                // 其余 config 包（registry data 等）忽略：聊天客户端不需要世界数据
+                // 其余 config 包（registry data、feature flags 等）不影响聊天客户端，安全忽略。
                 else -> Unit
             }
+        }
+
+        /**
+         * 本客户端不渲染资源包，但要像 MCC 一样回复 accepted + successfully loaded，
+         * 否则要求资源包状态的代理服会一直停在 configuration。
+         */
+        private fun respondToConfigurationResourcePack(ctx: ChannelHandlerContext, buf: ByteBuf) {
+            val packId = buf.readUuid()
+            val responseId = palette.sbId(PacketKey.SB_CONFIG_RESOURCE_PACK_RESPONSE) ?: return
+            for (status in intArrayOf(3, 0)) { // ACCEPTED, SUCCESSFULLY_LOADED
+                val response = ctx.alloc().buffer().writeVarInt(responseId)
+                response.writeUuid(packId)
+                response.writeVarInt(status)
+                ctx.writeAndFlush(response)
+            }
+            Log.i(LOG_TAG, "已回应配置阶段资源包状态")
         }
 
         /**
@@ -378,6 +449,8 @@ class MinecraftClient(
          * 导致 chat.disabled.missingProfileKey。
          */
         private fun enterPlay(ctx: ChannelHandlerContext) {
+            setupTimeout?.cancel(false)
+            setupTimeout = null
             phase = Phase.PLAY
             _state.value = ConnectionState.Connected(serverBrand = null)
         }
@@ -638,6 +711,8 @@ class MinecraftClient(
         }
 
         override fun channelInactive(ctx: ChannelHandlerContext) {
+            setupTimeout?.cancel(false)
+            setupTimeout = null
             latestCommandSuggestionInput = ""
             _commandSuggestions.value = CommandSuggestions.Empty
             if (_state.value is ConnectionState.Failed) return
@@ -661,6 +736,8 @@ class MinecraftClient(
         }
 
         override fun exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable) {
+            setupTimeout?.cancel(false)
+            setupTimeout = null
             _state.value = ConnectionState.Failed(cause.message ?: "未知错误")
             ctx.close()
         }
@@ -683,7 +760,9 @@ class MinecraftClient(
     }
 
     private companion object {
+        const val LOG_TAG = "BilicraftMC"
         // 聊天 acknowledged 字段固定 20 位（1.19.1+），序列化为 3 字节
         const val ACKNOWLEDGED_BITS = 20
+        const val LOGIN_TIMEOUT_SECONDS = 30L
     }
 }

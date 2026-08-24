@@ -31,10 +31,13 @@ enum class PacketKey(val phase: PacketPhase) {
     // --- serverbound ---
     SB_LOGIN_START(PacketPhase.LOGIN),
     SB_ENCRYPTION_RESPONSE(PacketPhase.LOGIN),
+    SB_LOGIN_PLUGIN_RESPONSE(PacketPhase.LOGIN),          // 回应代理/模组的 Login Plugin Request
     SB_LOGIN_ACK(PacketPhase.LOGIN),                    // 1.20.2+ 登录完成确认（进入 configuration）
+    SB_CONFIG_CLIENT_INFORMATION(PacketPhase.CONFIGURATION), // configuration 开始后上报客户端设置
     SB_CONFIG_KNOWN_PACKS(PacketPhase.CONFIGURATION),   // 1.20.5+/协议766+ 回应服务器 Known Packs
     SB_CONFIG_FINISH_ACK(PacketPhase.CONFIGURATION),    // 确认 configuration 结束（进入 play）
     SB_CONFIG_KEEP_ALIVE(PacketPhase.CONFIGURATION),
+    SB_CONFIG_RESOURCE_PACK_RESPONSE(PacketPhase.CONFIGURATION), // 配置阶段资源包状态
     SB_KEEP_ALIVE_PLAY(PacketPhase.PLAY),
     SB_CHAT_MESSAGE(PacketPhase.PLAY),                  // play 阶段发送聊天
     SB_CHAT_COMMAND(PacketPhase.PLAY),                  // 1.19+ 斜杠命令走独立包（非 Chat Message）
@@ -48,9 +51,11 @@ enum class PacketKey(val phase: PacketPhase) {
     CB_LOGIN_SUCCESS(PacketPhase.LOGIN),
     CB_SET_COMPRESSION(PacketPhase.LOGIN),
     CB_LOGIN_DISCONNECT(PacketPhase.LOGIN),
+    CB_LOGIN_PLUGIN_REQUEST(PacketPhase.LOGIN),           // 代理/模组登录扩展请求
     CB_CONFIG_KNOWN_PACKS(PacketPhase.CONFIGURATION),   // 1.20.5+/协议766+ 服务器询问 Known Packs
     CB_CONFIG_FINISH(PacketPhase.CONFIGURATION),
     CB_CONFIG_KEEP_ALIVE(PacketPhase.CONFIGURATION),
+    CB_CONFIG_RESOURCE_PACK(PacketPhase.CONFIGURATION),
     CB_CONFIG_DISCONNECT(PacketPhase.CONFIGURATION),
     CB_PLAY_DISCONNECT(PacketPhase.PLAY),
     CB_JOIN_GAME(PacketPhase.PLAY),                     // play 首包 Login(play)：会话公钥须在此之后上报
@@ -122,11 +127,14 @@ object PaletteRegistry {
             sbMap = mapOf(
                 PacketKey.SB_LOGIN_START to 0x00,
                 PacketKey.SB_ENCRYPTION_RESPONSE to 0x01,
+                PacketKey.SB_LOGIN_PLUGIN_RESPONSE to 0x02,
                 PacketKey.SB_LOGIN_ACK to 0x03,
+                PacketKey.SB_CONFIG_CLIENT_INFORMATION to 0x00,
                 // Known Packs 仅 1.20.5+/766+ 存在
                 *(if (protocol >= 766) arrayOf(PacketKey.SB_CONFIG_KNOWN_PACKS to 0x07) else emptyArray()),
                 PacketKey.SB_CONFIG_FINISH_ACK to 0x03,
                 PacketKey.SB_CONFIG_KEEP_ALIVE to 0x04,
+                *(if (protocol >= 765) arrayOf(PacketKey.SB_CONFIG_RESOURCE_PACK_RESPONSE to 0x06) else emptyArray()),
                 PacketKey.SB_KEEP_ALIVE_PLAY to play.sbKeepAlive,
                 PacketKey.SB_CHAT_MESSAGE to play.sbChatMessage,
                 PacketKey.SB_CHAT_COMMAND to play.sbChatCommand,
@@ -140,9 +148,11 @@ object PaletteRegistry {
                 PacketKey.CB_LOGIN_SUCCESS to 0x02,
                 PacketKey.CB_SET_COMPRESSION to 0x03,
                 PacketKey.CB_LOGIN_DISCONNECT to 0x00,
+                PacketKey.CB_LOGIN_PLUGIN_REQUEST to 0x04,
                 *(if (protocol >= 766) arrayOf(PacketKey.CB_CONFIG_KNOWN_PACKS to 0x0E) else emptyArray()),
                 PacketKey.CB_CONFIG_FINISH to 0x03,
                 PacketKey.CB_CONFIG_KEEP_ALIVE to 0x04,
+                *(if (protocol >= 765) arrayOf(PacketKey.CB_CONFIG_RESOURCE_PACK to 0x09) else emptyArray()),
                 PacketKey.CB_CONFIG_DISCONNECT to 0x02,
                 PacketKey.CB_PLAY_DISCONNECT to play.cbDisconnect,
                 PacketKey.CB_JOIN_GAME to play.cbJoinGame,
@@ -323,6 +333,7 @@ object PaletteRegistry {
         sbMap = mapOf(
             PacketKey.SB_LOGIN_START to 0x00,
             PacketKey.SB_ENCRYPTION_RESPONSE to 0x01,
+            PacketKey.SB_LOGIN_PLUGIN_RESPONSE to 0x02,
             PacketKey.SB_KEEP_ALIVE_PLAY to 0x12,
             PacketKey.SB_CHAT_MESSAGE to 0x05,
         ),
@@ -331,6 +342,7 @@ object PaletteRegistry {
             PacketKey.CB_LOGIN_SUCCESS to 0x02,
             PacketKey.CB_SET_COMPRESSION to 0x03,
             PacketKey.CB_LOGIN_DISCONNECT to 0x00,
+            PacketKey.CB_LOGIN_PLUGIN_REQUEST to 0x04,
             PacketKey.CB_PLAY_DISCONNECT to 0x1A,
             PacketKey.CB_KEEP_ALIVE_PLAY to 0x21,
             PacketKey.CB_SYSTEM_CHAT to 0x62,

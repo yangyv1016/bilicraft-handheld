@@ -1240,7 +1240,15 @@ private fun SettingsScreen(vm: MainViewModel) {
             onDismissRequest = { removingAccountUuid = null },
             icon = { Icon(Icons.Default.Delete, contentDescription = null) },
             title = { Text("移除账号") },
-            text = { Text("确定移除账号「${target?.username ?: uuid}」？该账号的登录凭据将从本机抹除，需要时可重新登录。") },
+            text = {
+                Text(
+                    if (target?.isOffline == true) {
+                        "确定移除离线账号「${target.username}」？该账号将从本机账号列表中删除。"
+                    } else {
+                        "确定移除账号「${target?.username ?: uuid}」？该账号的登录凭据将从本机抹除，需要时可重新登录。"
+                    }
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     vm.removeAccount(uuid)
@@ -1619,7 +1627,10 @@ private fun AccountRow(
 ) {
     ListItem(
         headlineContent = { Text(account.username, fontWeight = FontWeight.SemiBold) },
-        supportingContent = { Text(if (account.isActive) "当前使用中" else "点击切换到该账号") },
+        supportingContent = {
+            val type = if (account.isOffline) "离线账号" else "微软账号"
+            Text(if (account.isActive) "$type · 当前使用中" else "$type · 点击切换")
+        },
         leadingContent = {
             Icon(
                 Icons.Default.AccountCircle,

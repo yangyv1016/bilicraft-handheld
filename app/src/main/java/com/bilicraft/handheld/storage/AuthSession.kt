@@ -17,10 +17,12 @@ data class AuthSession(
     val mcUuid: String,             // 玩家 UUID（无符号，无短横线形式由协议层处理）
     val mcUsername: String,         // 玩家名
     val mcTokenObtainedAt: Long,    // mcAccessToken 获取时间戳（ms），用于判断是否过期
-    val mcTokenExpiresIn: Long      // mcAccessToken 有效期（秒）
+    val mcTokenExpiresIn: Long,     // mcAccessToken 有效期（秒）
+    val isOffline: Boolean = false  // 离线账号不含微软凭据，只能进入 offline-mode 服务器
 ) {
     /** 是否已接近过期（留 5 分钟缓冲），到点则触发静默刷新 */
     fun isMcTokenNearExpiry(nowMs: Long = System.currentTimeMillis()): Boolean {
+        if (isOffline) return false
         val expiryMs = mcTokenObtainedAt + (mcTokenExpiresIn - 300) * 1000
         return nowMs >= expiryMs
     }

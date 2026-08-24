@@ -51,6 +51,7 @@ class MinecraftClient(
     private val accessToken: String,
     private val playerName: String,
     private val playerUuid: String,
+    private val offlineAccount: Boolean = false,
     private val signingMode: ChatSigningMode = ChatSigningMode.UNSIGNED,
     private val certificate: com.bilicraft.handheld.auth.PlayerCertificate? = null
 ) {
@@ -592,6 +593,14 @@ class MinecraftClient(
             }
 
         private fun doEncryption(ctx: ChannelHandlerContext, buf: ByteBuf) {
+            if (offlineAccount) {
+                _state.value = ConnectionState.Failed(
+                    "离线账号只能进入关闭正版验证（online-mode=false）的服务器",
+                    retriable = false
+                )
+                ctx.close()
+                return
+            }
             val serverId = buf.readString()
             val pubKeyBytes = buf.readByteArray()
             val verifyToken = buf.readByteArray()

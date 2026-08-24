@@ -64,6 +64,10 @@ class AuthManager(
      */
     suspend fun silentRefresh(): AuthSession? {
         val existing = store.loadSession() ?: return null
+        if (existing.isOffline) {
+            _state.value = AuthState.Success(McProfile(existing.mcUuid, existing.mcUsername))
+            return existing
+        }
         val ms = when (val r = client.refreshMsToken(existing.msRefreshToken)) {
             is AuthClient.Step.Ok -> r.value
             is AuthClient.Step.Err -> return null
@@ -74,6 +78,36 @@ class AuthManager(
     /** 读取本地会话（不触网） */
     fun currentSession(): AuthSession? = store.loadSession()
 
+    /** 打开“添加账号”页前清理上一次登录流程的展示状态，不改动已保存账户。 */
+    fun prepareLogin() {
+        _state.value = AuthState.Idle
+    }
+
+    /**
+     * 新增并切换到离线账号。UUID 使用 vanilla 的 OfflinePlayer 规则生成，
+     * 不保存任何伪造 token，也不会尝试访问微软/Mojang 接口。
+     */
+    fun loginOffline(rawUsername: String): AuthSession? {
+        val username = OfflineAccount.normalizeUsername(rawUsername)
+        OfflineAccount.validateUsername(username)?.let {
+            fail(it)
+            return null
+        }
+        val session = AuthSession(
+            msRefreshToken = "",
+            mcAccessToken = "",
+            mcUuid = OfflineAccount.uuidFor(username),
+            mcUsername = username,
+            mcTokenObtainedAt = 0L,
+            mcTokenExpiresIn = 0L,
+            isOffline = true
+        )
+        store.saveSession(session)
+        refreshAccounts()
+        _state.value = AuthState.Success(McProfile(session.mcUuid, session.mcUsername))
+        return session
+    }
+
     /**
      * 切换活跃账户，随后对新账户做一次静默刷新（其 token 可能已过期）。
      * 返回切换并刷新后的可用会话；uuid 无效或刷新失败返回 null。
@@ -82,7 +116,7 @@ class AuthManager(
         val switched = store.setActiveAccount(uuid) ?: return null
         refreshAccounts()
         _state.value = AuthState.Success(McProfile(switched.mcUuid, switched.mcUsername))
-        return if (switched.isMcTokenNearExpiry()) silentRefresh() else switched
+        return if (!switched.isOffline && switched.isMcTokenNearExpiry()) silentRefresh() else switched
     }
 
     /**
@@ -160,7 +194,12 @@ class AuthManager(
     private fun readAccountSummaries(): List<AccountSummary> {
         val activeUuid = store.loadSession()?.mcUuid
         return store.loadAllAccounts().map {
-            AccountSummary(uuid = it.mcUuid, username = it.mcUsername, isActive = it.mcUuid == activeUuid)
+            AccountSummary(
+                uuid = it.mcUuid,
+                username = it.mcUsername,
+                isActive = it.mcUuid == activeUuid,
+                isOffline = it.isOffline
+            )
         }
     }
 

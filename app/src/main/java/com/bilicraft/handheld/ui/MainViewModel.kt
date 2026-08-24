@@ -203,7 +203,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         loginJob = viewModelScope.launch {
             auth.startDeviceLogin()
             _loggedIn.value = auth.currentSession() != null
+            if (auth.state.value is AuthState.Success) _loginOverlay.value = false
+        }
+    }
+
+    fun startOfflineLogin(username: String) {
+        loginJob?.cancel()
+        loginJob = null
+        val session = auth.loginOffline(username)
+        _loggedIn.value = auth.currentSession() != null
+        if (session != null) {
             _loginOverlay.value = false
+            _uiMessage.value = "已使用离线账号 ${session.mcUsername} 登录"
         }
     }
 
@@ -215,6 +226,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshToken() {
+        if (auth.currentSession()?.isOffline == true) {
+            _uiMessage.value = "离线账号无需刷新 Token"
+            return
+        }
         viewModelScope.launch {
             val refreshed = auth.silentRefresh()
             _loggedIn.value = refreshed != null
@@ -442,8 +457,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun addAccount() {
+        loginJob?.cancel()
+        loginJob = null
+        auth.prepareLogin()
         _loginOverlay.value = true
-        startLogin()
     }
 
     /**

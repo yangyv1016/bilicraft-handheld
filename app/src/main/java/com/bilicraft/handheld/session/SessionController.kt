@@ -172,7 +172,7 @@ class SessionController(
         }
 
         // 强制签名模式：连接前取玩家证书（私钥只在内存流转）
-        val certificate = if (request.signingMode == ChatSigningMode.SIGNED) {
+        val certificate = if (request.signingMode == ChatSigningMode.SIGNED && !session.isOffline) {
             publishSystem(request, "正在获取签名证书…")
             when (val r = withTimeoutOrNull(CERTIFICATE_FETCH_TIMEOUT_MS) { authManager.fetchCertificate(session.mcAccessToken) }) {
                 is com.bilicraft.handheld.auth.AuthClient.Step.Ok -> r.value
@@ -185,7 +185,12 @@ class SessionController(
                     null
                 }
             }
-        } else null
+        } else {
+            if (request.signingMode == ChatSigningMode.SIGNED && session.isOffline) {
+                publishSystem(request, "离线账号不支持 Mojang 签名证书，已使用未签名聊天")
+            }
+            null
+        }
         if (!request.isCurrent()) return
 
         val mc = MinecraftClient(
@@ -194,6 +199,7 @@ class SessionController(
             accessToken = session.mcAccessToken,
             playerName = session.mcUsername,
             playerUuid = session.mcUuid,
+            offlineAccount = session.isOffline,
             signingMode = if (certificate != null) ChatSigningMode.SIGNED else ChatSigningMode.UNSIGNED,
             certificate = certificate
         )

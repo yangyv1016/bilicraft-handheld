@@ -51,7 +51,8 @@ data class McProfile(
 data class AccountSummary(
     val uuid: String,
     val username: String,
-    val isActive: Boolean
+    val isActive: Boolean,
+    val isOffline: Boolean
 )
 
 /**

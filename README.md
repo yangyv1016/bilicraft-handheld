@@ -151,24 +151,6 @@ scope 固定为 `XboxLive.signin offline_access`（硬性要求，含离线刷�
 
 ---
 
-## 提交与发布流程
-
-日常提交与发布 Release 的完整约定见 [提交与发布流程](docs/commit-workflow.md)。核心一条：**日常提交不写更新公告，只有确认构建 Release、打 `v*` tag 时才在 GitHub Release 顶部编写面向玩家的公告。**
-
----
-
-## 持续集成（CI）
-
-`.github/workflows/` 下有两条 GitHub Actions 流水线：
-
-- **ci.yml**：`push` / PR 到 main/master 触发。装 JDK 17 → 用官方 gradle 生成 wrapper → `assembleDebug` → 上传 `app-debug` APK 为构建产物。
-- **release.yml**：推送 `v*` tag 触发。构建 `assembleRelease`（未签名）→ 自动挂到 GitHub Release。
-- **deploy-cdn.yml**：手动、定时或 Release 成功后触发。运行 `scripts/build-cdn.mjs` 生成 App 更新索引、官方插件市场索引、插件包镜像和 CDK 配置，再部署到 Cloudflare Pages。
-
-> 因为本仓库未提交 Gradle wrapper 的二进制 jar，两条流水线都先用 `gradle wrapper` 生成它再构建。若你在本地补交了 wrapper jar，可删掉「Generate Gradle wrapper」步骤直接用 `./gradlew`。release 产物为未签名 APK，需要正式签名时在仓库 Secrets 配置 keystore 并补充签名步骤。
-
----
-
 ## 已知限制
 
 - **协议映射（palette）**：协议差异用 per-version 精确映射（`PacketPalette` + `PaletteRegistry`）收敛，逻辑包 `PacketKey` ↔ 数字 id 双向查表，取代旧的「集合宽松匹配」。login/configuration 阶段包 id 跨 1.20.2–26.x 稳定、可信度高；**play 阶段聊天/系统消息 id 版本敏感**，已按 MCCTeam/Minecraft-Console-Client 的权威逐版本表分段声明（见 `PacketPalette.modernPlayChatIds`），精确覆盖协议 767→776：767(1.21) / 768-769(1.21.2-1.21.4) / 770(1.21.5) / 771-772(1.21.6-1.21.8) / 773-774(1.21.9-1.21.11) / 775-776(26.1-26.2)。老版本（1.13–1.20.1）保留一份 legacy 基线，标注「未逐版校准」，建议配合「自动识别」使用。

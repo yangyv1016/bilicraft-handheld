@@ -23,9 +23,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -45,6 +47,9 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
@@ -59,8 +64,12 @@ import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
@@ -115,10 +124,13 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bilicraft.handheld.appicon.AppIcon
 import com.bilicraft.handheld.cdk.CdkEntry
 import com.bilicraft.handheld.cdk.CdkState
+import com.bilicraft.handheld.config.QuickCommandConfig
 import com.bilicraft.handheld.config.QuickToolLink
 import com.bilicraft.handheld.config.ServerConfig
 import com.bilicraft.handheld.config.ThemeMode
@@ -144,6 +156,8 @@ private enum class MainTab(val title: String, val icon: ImageVector) {
     Plugins("插件管理", Icons.Default.Build),
     Settings("设置", Icons.Default.Settings)
 }
+
+private const val ABOUT_EASTER_EGG_TAP_COUNT = 5
 
 /**
  * Material 3 主界面。
@@ -254,6 +268,9 @@ private fun ScreenHeader(
     }
 }
 
+internal fun validSelectedIndex(selectedIndex: Int, itemCount: Int): Int =
+    if (itemCount <= 0) 0 else selectedIndex.coerceIn(0, itemCount - 1)
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun ServerSessionsScreen(vm: MainViewModel) {
@@ -264,7 +281,9 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
     val forceSigning by vm.forceSigning.collectAsStateWithLifecycle()
     val preferences by vm.preferences.collectAsStateWithLifecycle()
     val commandSuggestions by vm.commandSuggestions.collectAsStateWithLifecycle()
+    val allQuickCommands by vm.quickCommands.collectAsStateWithLifecycle()
     val pluginEntrypoints by vm.externalPluginEntrypoints.collectAsStateWithLifecycle()
+    val pluginServerBindings by vm.pluginServerBindings.collectAsStateWithLifecycle()
     val serverSessionStateHolder = rememberSaveableStateHolder()
 
     var selectedIndex by rememberSaveable { mutableIntStateOf(0) }
@@ -272,9 +291,27 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
     var showCreateDialog by remember { mutableStateOf(false) }
     var menuServer by remember { mutableStateOf<ServerConfig?>(null) }
     var showPluginEntrypoints by remember { mutableStateOf(false) }
+    var showTopMenu by remember { mutableStateOf(false) }
+    var showQuickCommands by remember { mutableStateOf(false) }
+    var showQuickCommandEditor by remember { mutableStateOf(false) }
 
-    LaunchedEffect(servers.size) {
-        selectedIndex = selectedIndex.coerceIn(0, (servers.size - 1).coerceAtLeast(0))
+    // StateFlow 会先发布缩短后的列表，LaunchedEffect 要到本次组合完成后才会运行。
+    // 因此删除末尾服务器时，不能把旧的越界索引传给 ScrollableTabRow。
+    val visibleSelectedIndex = validSelectedIndex(selectedIndex, servers.size)
+    val selectedServer = servers.getOrNull(visibleSelectedIndex)
+    val currentServerId = selectedServer?.id
+    val currentConnected = currentServerId != null &&
+        runtime.connectionStates[currentServerId] is ConnectionState.Connected
+    val serverQuickCommands = allQuickCommands.filter { it.serverId == currentServerId }
+    val serverPluginIds = pluginServerBindings
+        .asSequence()
+        .filter { it.serverId == currentServerId }
+        .map { it.pluginId }
+        .toSet()
+    val serverPluginEntrypoints = pluginEntrypoints.filter { it.pluginId in serverPluginIds }
+
+    LaunchedEffect(visibleSelectedIndex) {
+        selectedIndex = visibleSelectedIndex
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -291,13 +328,13 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 ScrollableTabRow(
-                    selectedTabIndex = selectedIndex,
+                    selectedTabIndex = visibleSelectedIndex,
                     edgePadding = 0.dp,
                     modifier = Modifier.weight(1f)
                 ) {
                     servers.forEachIndexed { index, server ->
                         Tab(
-                            selected = selectedIndex == index,
+                            selected = visibleSelectedIndex == index,
                             onClick = { selectedIndex = index },
                             text = {
                                 Text(
@@ -313,27 +350,51 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
                         )
                     }
                 }
-                IconButton(
-                    onClick = { showPluginEntrypoints = true },
-                    enabled = pluginEntrypoints.isNotEmpty()
-                ) {
-                    Icon(Icons.Default.Build, contentDescription = "插件入口")
-                }
-                val currentServerId = servers.getOrNull(selectedIndex)?.id
-                val currentConnected = currentServerId != null &&
-                    runtime.connectionStates[currentServerId] is ConnectionState.Connected
-                IconButton(
-                    onClick = { vm.respawn() },
-                    enabled = currentConnected
-                ) {
-                    Icon(Icons.Default.Favorite, contentDescription = "复活")
-                }
-                IconButton(onClick = { showCreateDialog = true }) {
-                    Icon(Icons.Default.Add, contentDescription = "新增服务器")
+                Box {
+                    IconButton(onClick = { showTopMenu = true }) {
+                        Icon(Icons.Default.Menu, contentDescription = "菜单")
+                    }
+                    DropdownMenu(
+                        expanded = showTopMenu,
+                        onDismissRequest = { showTopMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("快捷指令") },
+                            leadingIcon = { Icon(Icons.Default.Terminal, contentDescription = null) },
+                            onClick = {
+                                showTopMenu = false
+                                showQuickCommands = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("复活") },
+                            leadingIcon = { Icon(Icons.Default.Favorite, contentDescription = null) },
+                            enabled = currentConnected,
+                            onClick = {
+                                showTopMenu = false
+                                vm.respawn()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("插件入口") },
+                            leadingIcon = { Icon(Icons.Default.Build, contentDescription = null) },
+                            onClick = {
+                                showTopMenu = false
+                                showPluginEntrypoints = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("新增服务器") },
+                            leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                            onClick = {
+                                showTopMenu = false
+                                showCreateDialog = true
+                            }
+                        )
+                    }
                 }
             }
 
-            val selectedServer = servers.getOrNull(selectedIndex)
             if (selectedServer != null) {
                 val selectedConn = runtime.connectionStates[selectedServer.id] ?: ConnectionState.Disconnected
                 val selectedLog = runtime.chatLogs[selectedServer.id].orEmpty()
@@ -371,6 +432,35 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
             onSave = { name, host, port, version, signing ->
                 vm.createServer(name, host, port, version, signing)
                 showCreateDialog = false
+            }
+        )
+    }
+
+    if (showQuickCommands && selectedServer != null) {
+        QuickCommandsDialog(
+            serverName = selectedServer.name,
+            commands = serverQuickCommands,
+            onAdd = {
+                showQuickCommands = false
+                showQuickCommandEditor = true
+            },
+            onExecute = { config ->
+                showQuickCommands = false
+                vm.executeQuickCommand(selectedServer.id, config)
+            },
+            onDelete = vm::deleteQuickCommand,
+            onDismiss = { showQuickCommands = false }
+        )
+    }
+
+    if (showQuickCommandEditor && selectedServer != null) {
+        QuickCommandEditorDialog(
+            serverName = selectedServer.name,
+            onDismiss = { showQuickCommandEditor = false },
+            onSave = { name, command ->
+                vm.createQuickCommand(selectedServer.id, name, command)
+                showQuickCommandEditor = false
+                showQuickCommands = true
             }
         )
     }
@@ -421,7 +511,7 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
 
     if (showPluginEntrypoints) {
         PluginEntrypointPickerDialog(
-            entrypoints = pluginEntrypoints,
+            entrypoints = serverPluginEntrypoints,
             onOpen = { entry ->
                 showPluginEntrypoints = false
                 vm.openExternalPluginEntrypoint(entry.pluginId, entry.entrypointId)
@@ -654,7 +744,7 @@ private fun PluginEntrypointPickerDialog(
         title = { Text("插件入口") },
         text = {
             if (entrypoints.isEmpty()) {
-                Text("当前没有可用插件入口。请先在“插件管理”中安装并启用插件。")
+                Text("当前服务器没有已加载的可用插件。请前往“插件管理”，在目标插件旁点击“加载到服务器”。")
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     entrypoints.forEach { entry ->
@@ -836,6 +926,210 @@ private fun ChatLog(log: List<ChatEvent>, autoScroll: Boolean, modifier: Modifie
             )
         }
     }
+}
+
+@Composable
+private fun QuickCommandsDialog(
+    serverName: String,
+    commands: List<QuickCommandConfig>,
+    onAdd: () -> Unit,
+    onExecute: (QuickCommandConfig) -> Unit,
+    onDelete: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val configuration = LocalConfiguration.current
+    val widthFraction = if (configuration.screenWidthDp > configuration.screenHeightDp) 0.62f else 0.9f
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth(widthFraction)
+                .widthIn(max = 340.dp),
+            shape = RoundedCornerShape(28.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "快捷指令",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = serverName,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    FilledTonalIconButton(onClick = onAdd) {
+                        Icon(Icons.Default.Add, contentDescription = "新增快捷指令")
+                    }
+                }
+
+                Spacer(Modifier.height(14.dp))
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    if (commands.isEmpty()) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Terminal,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = "还没有快捷指令",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = "点击右上角＋添加",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    } else {
+                        commands.forEach { config ->
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onExecute(config) },
+                                shape = RoundedCornerShape(18.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.secondaryContainer
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.primaryContainer),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Default.PlayArrow,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            text = config.name,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = config.command,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    IconButton(onClick = { onDelete(config.id) }) {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            contentDescription = "删除${config.name}",
+                                            tint = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.End)
+                ) { Text("关闭") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickCommandEditorDialog(
+    serverName: String,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var command by remember { mutableStateOf("/") }
+    val canSave = name.trim().isNotEmpty() && command.trim().removePrefix("/").isNotBlank()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("新增快捷指令") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "保存到「$serverName」，只会在该服务器下显示。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("快捷指令名称") },
+                    placeholder = { Text("例如：返回主城") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = command,
+                    onValueChange = { command = it },
+                    label = { Text("输入的指令") },
+                    placeholder = { Text("例如：/spawn") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSave(name.trim(), command.trim()) },
+                enabled = canSave
+            ) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
 }
 
 @Composable
@@ -1031,6 +1325,7 @@ private fun ToolEditorDialog(
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun SettingsScreen(vm: MainViewModel) {
+    val context = LocalContext.current
     val preferences by vm.preferences.collectAsStateWithLifecycle()
     val accountList by vm.accounts.collectAsStateWithLifecycle()
     val updateState by vm.updateState.collectAsStateWithLifecycle()
@@ -1039,6 +1334,7 @@ private fun SettingsScreen(vm: MainViewModel) {
     var showSourcePicker by remember { mutableStateOf(false) }
     var showThemePicker by remember { mutableStateOf(false) }
     var showIconPicker by remember { mutableStateOf(false) }
+    var aboutTapCount by remember { mutableIntStateOf(0) }
     val currentAppIcon by vm.currentAppIcon.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
@@ -1160,8 +1456,15 @@ private fun SettingsScreen(vm: MainViewModel) {
         item {
             ListItem(
                 headlineContent = { Text("掌上碧玺") },
-                supportingContent = { Text("版本 ${vm.versionNameText}\n包名 ${vm.packageNameText}") },
-                leadingContent = { Icon(Icons.Default.Info, contentDescription = null) }
+                supportingContent = { Text("版本 ${vm.versionNameText}") },
+                leadingContent = { Icon(Icons.Default.Info, contentDescription = null) },
+                modifier = Modifier.clickable {
+                    aboutTapCount += 1
+                    if (aboutTapCount >= ABOUT_EASTER_EGG_TAP_COUNT) {
+                        aboutTapCount = 0
+                        context.startActivity(EasterEggVideoActivity.intent(context))
+                    }
+                }
             )
         }
         item {
@@ -1411,6 +1714,9 @@ private fun cdkWindowText(entry: CdkEntry): String? = when {
 private fun PluginCenterScreen(vm: MainViewModel) {
     val officialMarket by vm.officialMarket.collectAsStateWithLifecycle()
     val externalPlugins by vm.externalPlugins.collectAsStateWithLifecycle()
+    val servers by vm.servers.collectAsStateWithLifecycle()
+    val pluginServerBindings by vm.pluginServerBindings.collectAsStateWithLifecycle()
+    var pluginToLoad by remember { mutableStateOf<ExternalPluginEntry?>(null) }
     val pluginImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importExternalPlugin(uri)
     }
@@ -1446,6 +1752,8 @@ private fun PluginCenterScreen(vm: MainViewModel) {
             items(externalPlugins, key = { "installed-${it.id}" }) { plugin ->
                 ExternalPluginRow(
                     plugin = plugin,
+                    loadedServerCount = pluginServerBindings.count { it.pluginId == plugin.id },
+                    onLoadToServer = { pluginToLoad = plugin },
                     onEnabledChange = { enabled -> vm.setExternalPluginEnabled(plugin.id, enabled) },
                     onRemove = { vm.uninstallExternalPlugin(plugin.id) }
                 )
@@ -1481,6 +1789,23 @@ private fun PluginCenterScreen(vm: MainViewModel) {
         }
 
         item { Spacer(Modifier.height(24.dp)) }
+    }
+
+    pluginToLoad?.let { plugin ->
+        PluginServerLoadDialog(
+            plugin = plugin,
+            servers = servers,
+            initiallyLoadedServerIds = pluginServerBindings
+                .asSequence()
+                .filter { it.pluginId == plugin.id }
+                .map { it.serverId }
+                .toSet(),
+            onSave = { serverIds ->
+                vm.setPluginServers(plugin.id, serverIds)
+                pluginToLoad = null
+            },
+            onDismiss = { pluginToLoad = null }
+        )
     }
 }
 
@@ -1582,8 +1907,104 @@ private fun ExternalPluginPanelScreen(
 }
 
 @Composable
+private fun PluginServerLoadDialog(
+    plugin: ExternalPluginEntry,
+    servers: List<ServerConfig>,
+    initiallyLoadedServerIds: Set<String>,
+    onSave: (Set<String>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedServerIds by remember(plugin.id, initiallyLoadedServerIds) {
+        mutableStateOf(initiallyLoadedServerIds)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("加载到服务器") },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "选择允许显示「${plugin.name}」入口的服务器。",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                if (servers.isEmpty()) {
+                    Text(
+                        text = "还没有服务器配置。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    servers.forEach { server ->
+                        val selected = server.id in selectedServerIds
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    selectedServerIds = if (selected) {
+                                        selectedServerIds - server.id
+                                    } else {
+                                        selectedServerIds + server.id
+                                    }
+                                },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (selected) {
+                                    MaterialTheme.colorScheme.secondaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceVariant
+                                }
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = selected,
+                                    onCheckedChange = { checked ->
+                                        selectedServerIds = if (checked) {
+                                            selectedServerIds + server.id
+                                        } else {
+                                            selectedServerIds - server.id
+                                        }
+                                    }
+                                )
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        text = server.name,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "${server.host}:${server.port}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(selectedServerIds) }) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+}
+
+@Composable
 private fun ExternalPluginRow(
     plugin: ExternalPluginEntry,
+    loadedServerCount: Int,
+    onLoadToServer: () -> Unit,
     onEnabledChange: (Boolean) -> Unit,
     onRemove: () -> Unit
 ) {
@@ -1598,6 +2019,7 @@ private fun ExternalPluginRow(
             Text(
                 listOfNotNull(
                     "$status · ${plugin.version}",
+                    loadedServerCount.takeIf { it > 0 }?.let { "已加载到 $it 个服务器" },
                     plugin.description.takeIf { it.isNotBlank() },
                     plugin.statusMessage
                 ).joinToString("\n")
@@ -1605,7 +2027,17 @@ private fun ExternalPluginRow(
         },
         leadingContent = { Icon(Icons.Default.Build, contentDescription = null) },
         trailingContent = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.offset(y = 18.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedButton(
+                    onClick = onLoadToServer,
+                    enabled = plugin.enabled && plugin.loaded,
+                    modifier = Modifier.padding(end = 8.dp)
+                ) {
+                    Text("加载到服务器")
+                }
                 Switch(
                     checked = plugin.enabled,
                     onCheckedChange = onEnabledChange

@@ -175,11 +175,14 @@ class WebViewActivity : ComponentActivity() {
     private fun handleNonWebNavigation(view: WebView?, uri: Uri): Boolean {
         val scheme = uri.scheme?.lowercase()
         if (scheme in WEBVIEW_SCHEMES) return false
+        // B 站会用 bilibili:// 尝试唤醒客户端。彩蛋要求始终留在内置浏览器，
+        // 因此消费这次跳转，让当前 HTTPS 视频页继续显示。
+        if (scheme in IN_APP_ONLY_SCHEMES) return true
 
         val externalIntent = runCatching {
             if (scheme == "intent") Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME)
             else Intent(Intent.ACTION_VIEW, uri)
-        }.getOrNull() ?: return false
+        }.getOrNull() ?: return true
 
         return runCatching {
             startActivity(externalIntent)
@@ -188,12 +191,13 @@ class WebViewActivity : ComponentActivity() {
             externalIntent.getStringExtra("browser_fallback_url")
                 ?.takeIf { fallback -> fallback.startsWith("https://") || fallback.startsWith("http://") }
                 ?.let { fallback -> view?.loadUrl(fallback); true }
-                ?: false
+                ?: true
         }
     }
 
     companion object {
         private val WEBVIEW_SCHEMES = setOf("http", "https", "about", "javascript", "data", "blob")
+        private val IN_APP_ONLY_SCHEMES = setOf("bilibili")
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_URL = "url"
         private const val KEY_WEBVIEW_STATE = "webview_state"

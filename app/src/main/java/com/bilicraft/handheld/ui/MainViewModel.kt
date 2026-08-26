@@ -12,6 +12,8 @@ import com.bilicraft.handheld.appicon.AppIconCatalog
 import com.bilicraft.handheld.auth.AccountSummary
 import com.bilicraft.handheld.auth.AuthState
 import com.bilicraft.handheld.config.QuickToolLink
+import com.bilicraft.handheld.config.QuickCommandConfig
+import com.bilicraft.handheld.config.PluginServerBinding
 import com.bilicraft.handheld.config.ServerConfig
 import com.bilicraft.handheld.config.ThemeMode
 import com.bilicraft.handheld.config.UiPreferences
@@ -80,6 +82,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val accounts: StateFlow<List<AccountSummary>> = auth.accounts
     val servers: StateFlow<List<ServerConfig>> = uiConfigRepo.servers
     val quickTools: StateFlow<List<QuickToolLink>> = uiConfigRepo.tools
+    val quickCommands: StateFlow<List<QuickCommandConfig>> = uiConfigRepo.quickCommands
+    val pluginServerBindings: StateFlow<List<PluginServerBinding>> = uiConfigRepo.pluginServerBindings
     val preferences: StateFlow<UiPreferences> = uiConfigRepo.preferences
     val externalPlugins: StateFlow<List<ExternalPluginEntry>> = externalPluginManager.entries
     val externalPluginEntrypoints: StateFlow<List<ExternalPluginEntrypoint>> = externalPluginManager.entrypoints
@@ -121,9 +125,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     val currentAccountName: String
         get() = auth.currentSession()?.mcUsername ?: "未登录"
-
-    val packageNameText: String
-        get() = getApplication<Application>().packageName
 
     val versionNameText: String
         get() = BuildConfig.VERSION_NAME
@@ -372,6 +373,38 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (text.isBlank() || _serverRuntime.value.activeServerId != serverId) return
         _commandSuggestions.value = CommandSuggestions.Empty
         session.sendChat(text)
+    }
+
+    fun createQuickCommand(serverId: String, name: String, command: String) {
+        val normalizedCommand = QuickCommandConfig.normalizeCommand(command)
+        if (name.isBlank() || normalizedCommand.removePrefix("/").isBlank()) {
+            _uiMessage.value = "名称和指令不能为空"
+            return
+        }
+        viewModelScope.launch {
+            uiConfigRepo.upsertQuickCommand(
+                uiConfigRepo.newQuickCommand(serverId, name.trim(), normalizedCommand)
+            )
+            _uiMessage.value = "快捷指令已保存"
+        }
+    }
+
+    fun deleteQuickCommand(id: String) {
+        viewModelScope.launch {
+            uiConfigRepo.deleteQuickCommand(id)
+            _uiMessage.value = "快捷指令已删除"
+        }
+    }
+
+    fun executeQuickCommand(serverId: String, config: QuickCommandConfig) {
+        val connected = _serverRuntime.value.activeServerId == serverId &&
+            _serverRuntime.value.connectionStates[serverId] is ConnectionState.Connected
+        if (!connected) {
+            _uiMessage.value = "请先连接当前服务器"
+            return
+        }
+        session.sendChat(QuickCommandConfig.normalizeCommand(config.command))
+        _uiMessage.value = "已执行「${config.name}」"
     }
 
     /** 领取列表中的单个兑换码。 */
@@ -641,9 +674,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun uninstallExternalPlugin(pluginId: String) {
         viewModelScope.launch {
             val removed = withContext(Dispatchers.IO) { externalPluginManager.uninstall(pluginId) }
+            uiConfigRepo.clearPluginServerBindings(pluginId)
             officialPluginMarket.syncInstalledState()
             if (_activeExternalPluginPanel.value?.pluginId == pluginId) _activeExternalPluginPanel.value = null
             _uiMessage.value = if (removed) "外部插件已移除" else "外部插件已卸载"
+        }
+    }
+
+    fun setPluginServers(pluginId: String, serverIds: Set<String>) {
+        viewModelScope.launch {
+            uiConfigRepo.setPluginServers(pluginId, serverIds)
+            _uiMessage.value = if (serverIds.isEmpty()) {
+                "已从所有服务器卸载该插件"
+            } else {
+                "插件已加载到 ${serverIds.size} 个服务器"
+            }
         }
     }
 

@@ -27,6 +27,11 @@
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
         <activity
+            android:name=".ui.EasterEggVideoActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
+        <activity
             android:name=".ui.MainActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden" />

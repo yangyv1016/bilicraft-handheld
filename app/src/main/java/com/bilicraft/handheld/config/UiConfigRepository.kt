@@ -42,6 +42,35 @@ data class QuickToolLink(
 )
 
 @Serializable
+data class QuickCommandConfig(
+    val id: String,
+    val serverId: String,
+    val name: String,
+    val command: String
+) {
+    companion object {
+        fun normalizeCommand(input: String): String {
+            val trimmed = input.trim()
+            return if (trimmed.isEmpty() || trimmed.startsWith("/")) trimmed else "/$trimmed"
+        }
+    }
+}
+
+@Serializable
+data class PluginServerBinding(
+    val serverId: String,
+    val pluginId: String
+)
+
+internal fun replacePluginServerBindings(
+    current: List<PluginServerBinding>,
+    pluginId: String,
+    serverIds: Set<String>
+): List<PluginServerBinding> =
+    current.filterNot { it.pluginId == pluginId } +
+        serverIds.sorted().map { serverId -> PluginServerBinding(serverId, pluginId) }
+
+@Serializable
 enum class ThemeMode(val displayName: String) {
     System("跟随系统"),
     Light("浅色"),
@@ -67,6 +96,8 @@ class UiConfigRepository(context: Context) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
     private val serverFile = File(context.filesDir, "ui_servers.json")
     private val toolsFile = File(context.filesDir, "ui_tools.json")
+    private val commandsFile = File(context.filesDir, "ui_commands.json")
+    private val pluginServersFile = File(context.filesDir, "ui_plugin_servers.json")
     private val preferencesFile = File(context.filesDir, "ui_preferences.json")
     private val officialSigningMigrationFile = File(context.filesDir, "ui_official_server_signing_v1.migrated")
     private val railwayToolMigrationFile = File(context.filesDir, "ui_railway_tool_v1.migrated")
@@ -76,6 +107,12 @@ class UiConfigRepository(context: Context) {
 
     private val _tools = MutableStateFlow<List<QuickToolLink>>(emptyList())
     val tools: StateFlow<List<QuickToolLink>> = _tools.asStateFlow()
+
+    private val _quickCommands = MutableStateFlow<List<QuickCommandConfig>>(emptyList())
+    val quickCommands: StateFlow<List<QuickCommandConfig>> = _quickCommands.asStateFlow()
+
+    private val _pluginServerBindings = MutableStateFlow<List<PluginServerBinding>>(emptyList())
+    val pluginServerBindings: StateFlow<List<PluginServerBinding>> = _pluginServerBindings.asStateFlow()
 
     private val _preferences = MutableStateFlow(UiPreferences())
     val preferences: StateFlow<UiPreferences> = _preferences.asStateFlow()
@@ -90,6 +127,10 @@ class UiConfigRepository(context: Context) {
         }
         val loadedTools = loadList<QuickToolLink>(toolsFile) ?: defaultTools().also { saveList(toolsFile, it) }
         _tools.value = migrateRailwayTool(loadedTools)
+        _quickCommands.value = loadList<QuickCommandConfig>(commandsFile)
+            ?: defaultQuickCommands().also { saveList(commandsFile, it) }
+        _pluginServerBindings.value = loadList<PluginServerBinding>(pluginServersFile)
+            ?: emptyList<PluginServerBinding>().also { saveList(pluginServersFile, it) }
         _preferences.value = loadValue(preferencesFile) ?: UiPreferences().also { saveValue(preferencesFile, it) }
     }
 
@@ -133,6 +174,55 @@ class UiConfigRepository(context: Context) {
         val next = _servers.value.filterNot { it.id == id }
         _servers.value = next
         saveList(serverFile, next)
+
+        val nextCommands = _quickCommands.value.filterNot { it.serverId == id }
+        if (nextCommands.size != _quickCommands.value.size) {
+            _quickCommands.value = nextCommands
+            saveList(commandsFile, nextCommands)
+        }
+
+        val nextBindings = _pluginServerBindings.value.filterNot { it.serverId == id }
+        if (nextBindings.size != _pluginServerBindings.value.size) {
+            _pluginServerBindings.value = nextBindings
+            saveList(pluginServersFile, nextBindings)
+        }
+    }
+
+    suspend fun setPluginServers(pluginId: String, serverIds: Set<String>) = withContext(Dispatchers.IO) {
+        val validServerIds = _servers.value.mapTo(mutableSetOf()) { it.id }
+        val next = replacePluginServerBindings(
+            current = _pluginServerBindings.value,
+            pluginId = pluginId,
+            serverIds = serverIds.filterTo(mutableSetOf()) { it in validServerIds }
+        )
+        _pluginServerBindings.value = next
+        saveList(pluginServersFile, next)
+    }
+
+    suspend fun clearPluginServerBindings(pluginId: String) = withContext(Dispatchers.IO) {
+        val next = _pluginServerBindings.value.filterNot { it.pluginId == pluginId }
+        if (next.size != _pluginServerBindings.value.size) {
+            _pluginServerBindings.value = next
+            saveList(pluginServersFile, next)
+        }
+    }
+
+    suspend fun upsertQuickCommand(config: QuickCommandConfig) = withContext(Dispatchers.IO) {
+        val normalized = config.copy(command = QuickCommandConfig.normalizeCommand(config.command))
+        val current = _quickCommands.value
+        val next = if (current.any { it.id == normalized.id }) {
+            current.map { if (it.id == normalized.id) normalized else it }
+        } else {
+            current + normalized
+        }
+        _quickCommands.value = next
+        saveList(commandsFile, next)
+    }
+
+    suspend fun deleteQuickCommand(id: String) = withContext(Dispatchers.IO) {
+        val next = _quickCommands.value.filterNot { it.id == id }
+        _quickCommands.value = next
+        saveList(commandsFile, next)
     }
 
     suspend fun upsertTool(link: QuickToolLink) = withContext(Dispatchers.IO) {
@@ -187,6 +277,14 @@ class UiConfigRepository(context: Context) {
         url = url,
         description = description
     )
+
+    fun newQuickCommand(serverId: String, name: String, command: String): QuickCommandConfig =
+        QuickCommandConfig(
+            id = UUID.randomUUID().toString(),
+            serverId = serverId,
+            name = name,
+            command = QuickCommandConfig.normalizeCommand(command)
+        )
 
     private inline fun <reified T> loadList(file: File): List<T>? =
         runCatching {
@@ -284,6 +382,15 @@ class UiConfigRepository(context: Context) {
             title = "BBS",
             url = "https://bbs.bilicraft.com/",
             description = "社区论坛"
+        )
+    )
+
+    private fun defaultQuickCommands(): List<QuickCommandConfig> = listOf(
+        QuickCommandConfig(
+            id = "bilicraft-signin",
+            serverId = OFFICIAL_SERVER_ID,
+            name = "一键签到",
+            command = "/signin click"
         )
     )
 

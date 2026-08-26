@@ -13,6 +13,7 @@ const now = new Date().toISOString();
 const safeSegmentPattern = /^[A-Za-z0-9._-]+$/;
 const safeBhPluginFilePattern = /^[A-Za-z0-9._-]+\.bhplugin$/i;
 const sha256Pattern = /^[a-fA-F0-9]{64}$/;
+const pagesAssetPartSize = 20 * 1024 * 1024;
 
 await rm(outDir, { recursive: true, force: true });
 await mkdir(outDir, { recursive: true });
@@ -33,21 +34,23 @@ if (!apkAsset) {
 
 const tag = latestRelease.tag_name;
 const versionName = tag.replace(/^v/, "");
+assertSafeSegment("release tag", tag);
+if (path.basename(apkAsset.name) !== apkAsset.name) {
+  throw new Error(`APK asset contains an unsafe file name: ${apkAsset.name}`);
+}
 const apkBytes = await fetchBytes(apkAsset.browser_download_url);
 const apkSize = apkBytes.byteLength;
 const apkSha256 = createHash("sha256").update(apkBytes).digest("hex");
 const apkCdnPath = `/app/releases/${tag}/${apkAsset.name}`;
 const apkCdnUrl = `${cdnRoot}/app/releases/${encodeURIComponent(tag)}/${encodeURIComponent(apkAsset.name)}`;
+const apkParts = await writeApkParts(tag, apkBytes);
 
-await writeBinary(apkCdnPath, apkBytes);
-
-// Stable public URL that always redirects to the APK from the latest release.
 await writeText(
-  "/_redirects",
-  `/download/latest ${apkCdnPath} 302\n`
+  "/_worker.js",
+  await readFile(path.resolve(rootDir, "scripts/cdn-worker.mjs"), "utf8")
 );
 await writeJson(`/app/releases/${tag}/manifest.json`, {
-  schemaVersion: 1,
+  schemaVersion: 2,
   tag,
   versionName,
   updatedAt: now,
@@ -59,8 +62,10 @@ await writeJson(`/app/releases/${tag}/manifest.json`, {
     name: apkAsset.name,
     path: apkCdnPath,
     downloadUrl: apkCdnUrl,
+    sourceUrl: apkAsset.browser_download_url,
     sha256: apkSha256,
-    size: apkSize
+    size: apkSize,
+    parts: apkParts
   }
 });
 
@@ -73,8 +78,10 @@ await writeJson("/app/releases/latest.json", {
     apk: {
       name: apkAsset.name,
       downloadUrl: apkCdnUrl,
+      sourceUrl: apkAsset.browser_download_url,
       sha256: apkSha256,
-      size: apkSize
+      size: apkSize,
+      parts: apkParts
     }
   }
 });
@@ -113,6 +120,7 @@ await writeJson("/meta/sync-state.json", {
   output: {
     cdnRoot,
     apkPath: apkCdnPath,
+    apkParts: apkParts.length,
     apkSha256,
     apkSize,
     pluginPackages: pluginMarket.mirroredPackages,
@@ -124,6 +132,7 @@ await writeJson("/meta/sync-state.json", {
 console.log(`CDN files generated in ${outDir}`);
 console.log(`Release: ${tag}`);
 console.log(`APK: ${apkAsset.name}`);
+console.log(`APK parts: ${apkParts.length}`);
 console.log(`SHA-256: ${apkSha256}`);
 console.log(`Plugin packages: ${pluginMarket.mirroredPackages}`);
 console.log(`Discovered plugins: ${pluginMarket.discoveredPlugins}`);
@@ -638,6 +647,22 @@ async function writeBinary(relativePath, bytes) {
   const targetPath = toOutPath(relativePath);
   await mkdir(path.dirname(targetPath), { recursive: true });
   await writeFile(targetPath, bytes);
+}
+
+async function writeApkParts(tag, bytes) {
+  const parts = [];
+  for (let offset = 0, index = 0; offset < bytes.byteLength; offset += pagesAssetPartSize, index++) {
+    const partBytes = bytes.subarray(offset, Math.min(offset + pagesAssetPartSize, bytes.byteLength));
+    const partName = `part-${String(index + 1).padStart(3, "0")}.bin`;
+    const partPath = `/app/releases/${tag}/parts/${partName}`;
+    await writeBinary(partPath, partBytes);
+    parts.push({
+      path: partPath,
+      size: partBytes.byteLength,
+      sha256: createHash("sha256").update(partBytes).digest("hex")
+    });
+  }
+  return parts;
 }
 
 function toOutPath(relativePath) {

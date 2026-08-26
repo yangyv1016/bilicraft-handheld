@@ -2,6 +2,13 @@ name: Deploy CDN
 
 on:
   workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/deploy-cdn.yml'
+      - 'scripts/build-cdn.mjs'
+      - 'scripts/cdn-worker.mjs'
+      - 'scripts/cdn-worker.test.mjs'
   schedule:
     - cron: '17 * * * *'
   workflow_run:
@@ -29,6 +36,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      - name: Test CDN worker
+        run: node --test scripts/cdn-worker.test.mjs
 
       - name: Build CDN files
         env:

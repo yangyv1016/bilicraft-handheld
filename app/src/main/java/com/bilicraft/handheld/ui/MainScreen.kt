@@ -2013,41 +2013,63 @@ private fun ExternalPluginRow(
         plugin.loaded -> "已启用"
         else -> "加载失败"
     }
-    ListItem(
-        headlineContent = { Text(plugin.name) },
-        supportingContent = {
-            Text(
-                listOfNotNull(
-                    "$status · ${plugin.version}",
-                    loadedServerCount.takeIf { it > 0 }?.let { "已加载到 $it 个服务器" },
-                    plugin.description.takeIf { it.isNotBlank() },
-                    plugin.statusMessage
-                ).joinToString("\n")
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Top
+        ) {
+            Icon(
+                Icons.Default.Build,
+                contentDescription = null,
+                modifier = Modifier.padding(top = 2.dp)
             )
-        },
-        leadingContent = { Icon(Icons.Default.Build, contentDescription = null) },
-        trailingContent = {
-            Row(
-                modifier = Modifier.offset(y = 18.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedButton(
-                    onClick = onLoadToServer,
-                    enabled = plugin.enabled && plugin.loaded,
-                    modifier = Modifier.padding(end = 8.dp)
-                ) {
-                    Text("加载到服务器")
-                }
-                Switch(
-                    checked = plugin.enabled,
-                    onCheckedChange = onEnabledChange
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = plugin.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
                 )
-                IconButton(onClick = onRemove) {
-                    Icon(Icons.Default.Delete, contentDescription = "移除外部插件")
-                }
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = listOfNotNull(
+                        "$status · ${plugin.version}",
+                        loadedServerCount.takeIf { it > 0 }?.let { "已加载到 $it 个服务器" },
+                        plugin.description.takeIf { it.isNotBlank() },
+                        plugin.statusMessage
+                    ).joinToString("\n"),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
-    )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 10.dp),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedButton(
+                onClick = onLoadToServer,
+                enabled = plugin.enabled && plugin.loaded
+            ) {
+                Text("加载到服务器", maxLines = 1)
+            }
+            Spacer(Modifier.width(8.dp))
+            Switch(
+                checked = plugin.enabled,
+                onCheckedChange = onEnabledChange
+            )
+            IconButton(onClick = onRemove) {
+                Icon(Icons.Default.Delete, contentDescription = "移除外部插件")
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)

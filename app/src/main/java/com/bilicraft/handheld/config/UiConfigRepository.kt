@@ -49,10 +49,11 @@ data class QuickCommandConfig(
     val command: String
 ) {
     companion object {
-        fun normalizeCommand(input: String): String {
-            val trimmed = input.trim()
-            return if (trimmed.isEmpty() || trimmed.startsWith("/")) trimmed else "/$trimmed"
-        }
+        /**
+         * 快捷内容既可以是斜杠命令，也可以是普通聊天文本。
+         * 旧配置中的命令本来就带有斜杠，因此这里只清理首尾空白即可保持兼容。
+         */
+        fun normalizeCommand(input: String): String = input.trim()
     }
 }
 

@@ -193,14 +193,14 @@ class AuthManager(
     /** 把存储层账户表投影为脱敏摘要，并标记当前活跃账户 */
     private fun readAccountSummaries(): List<AccountSummary> {
         val activeUuid = store.loadSession()?.mcUuid
-        return store.loadAllAccounts().map {
+        return activeAccountFirst(store.loadAllAccounts().map {
             AccountSummary(
                 uuid = it.mcUuid,
                 username = it.mcUsername,
                 isActive = it.mcUuid == activeUuid,
                 isOffline = it.isOffline
             )
-        }
+        })
     }
 
     private fun refreshAccounts() {

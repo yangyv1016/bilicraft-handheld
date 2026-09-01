@@ -375,17 +375,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         session.sendChat(text)
     }
 
-    fun createQuickCommand(serverId: String, name: String, command: String) {
-        val normalizedCommand = QuickCommandConfig.normalizeCommand(command)
-        if (name.isBlank() || normalizedCommand.removePrefix("/").isBlank()) {
-            _uiMessage.value = "名称和指令不能为空"
+    fun saveQuickCommand(serverId: String, id: String?, name: String, content: String) {
+        val normalizedContent = QuickCommandConfig.normalizeCommand(content)
+        if (name.isBlank() || normalizedContent.isBlank()) {
+            _uiMessage.value = "名称和发送内容不能为空"
             return
         }
         viewModelScope.launch {
-            uiConfigRepo.upsertQuickCommand(
-                uiConfigRepo.newQuickCommand(serverId, name.trim(), normalizedCommand)
-            )
-            _uiMessage.value = "快捷指令已保存"
+            val config = if (id == null) {
+                uiConfigRepo.newQuickCommand(serverId, name.trim(), normalizedContent)
+            } else {
+                QuickCommandConfig(
+                    id = id,
+                    serverId = serverId,
+                    name = name.trim(),
+                    command = normalizedContent
+                )
+            }
+            uiConfigRepo.upsertQuickCommand(config)
+            _uiMessage.value = "快捷内容已保存"
         }
     }
 
@@ -403,8 +411,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _uiMessage.value = "请先连接当前服务器"
             return
         }
-        session.sendChat(QuickCommandConfig.normalizeCommand(config.command))
-        _uiMessage.value = "已执行「${config.name}」"
+        val content = QuickCommandConfig.normalizeCommand(config.command)
+        if (content.isBlank()) return
+        session.sendChat(content)
+        _uiMessage.value = if (content.startsWith("/")) {
+            "已执行「${config.name}」"
+        } else {
+            "已发送「${config.name}」"
+        }
     }
 
     /** 领取列表中的单个兑换码。 */

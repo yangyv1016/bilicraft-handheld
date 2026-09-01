@@ -147,6 +147,8 @@ import com.bilicraft.handheld.update.DownloadSource
 import com.bilicraft.handheld.update.ReleaseInfo
 import com.bilicraft.handheld.update.UpdateState
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Locale
 import com.bilicraft.handheld.version.McVersion
 import com.bilicraft.handheld.version.VersionRepository
 
@@ -294,6 +296,7 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
     var showTopMenu by remember { mutableStateOf(false) }
     var showQuickCommands by remember { mutableStateOf(false) }
     var showQuickCommandEditor by remember { mutableStateOf(false) }
+    var editingQuickCommand by remember { mutableStateOf<QuickCommandConfig?>(null) }
 
     // StateFlow 会先发布缩短后的列表，LaunchedEffect 要到本次组合完成后才会运行。
     // 因此删除末尾服务器时，不能把旧的越界索引传给 ScrollableTabRow。
@@ -442,6 +445,12 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
             commands = serverQuickCommands,
             onAdd = {
                 showQuickCommands = false
+                editingQuickCommand = null
+                showQuickCommandEditor = true
+            },
+            onEdit = { config ->
+                showQuickCommands = false
+                editingQuickCommand = config
                 showQuickCommandEditor = true
             },
             onExecute = { config ->
@@ -456,10 +465,12 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
     if (showQuickCommandEditor && selectedServer != null) {
         QuickCommandEditorDialog(
             serverName = selectedServer.name,
+            initial = editingQuickCommand,
             onDismiss = { showQuickCommandEditor = false },
-            onSave = { name, command ->
-                vm.createQuickCommand(selectedServer.id, name, command)
+            onSave = { name, content ->
+                vm.saveQuickCommand(selectedServer.id, editingQuickCommand?.id, name, content)
                 showQuickCommandEditor = false
+                editingQuickCommand = null
                 showQuickCommands = true
             }
         )
@@ -933,6 +944,7 @@ private fun QuickCommandsDialog(
     serverName: String,
     commands: List<QuickCommandConfig>,
     onAdd: () -> Unit,
+    onEdit: (QuickCommandConfig) -> Unit,
     onExecute: (QuickCommandConfig) -> Unit,
     onDelete: (String) -> Unit,
     onDismiss: () -> Unit
@@ -1054,11 +1066,22 @@ private fun QuickCommandsDialog(
                                             overflow = TextOverflow.Ellipsis
                                         )
                                         Text(
-                                            text = config.command,
+                                            text = if (config.command.startsWith("/")) {
+                                                "命令 · ${config.command}"
+                                            } else {
+                                                "聊天 · ${config.command}"
+                                            },
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSecondaryContainer,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    IconButton(onClick = { onEdit(config) }) {
+                                        Icon(
+                                            Icons.Default.Edit,
+                                            contentDescription = "编辑${config.name}",
+                                            tint = MaterialTheme.colorScheme.onSecondaryContainer
                                         )
                                     }
                                     IconButton(onClick = { onDelete(config.id) }) {
@@ -1087,16 +1110,17 @@ private fun QuickCommandsDialog(
 @Composable
 private fun QuickCommandEditorDialog(
     serverName: String,
+    initial: QuickCommandConfig?,
     onDismiss: () -> Unit,
     onSave: (String, String) -> Unit
 ) {
-    var name by remember { mutableStateOf("") }
-    var command by remember { mutableStateOf("/") }
-    val canSave = name.trim().isNotEmpty() && command.trim().removePrefix("/").isNotBlank()
+    var name by remember(initial?.id) { mutableStateOf(initial?.name.orEmpty()) }
+    var content by remember(initial?.id) { mutableStateOf(initial?.command.orEmpty()) }
+    val canSave = name.trim().isNotEmpty() && content.trim().isNotEmpty()
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("新增快捷指令") },
+        title = { Text(if (initial == null) "新增快捷内容" else "编辑快捷内容") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
@@ -1107,24 +1131,29 @@ private fun QuickCommandEditorDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("快捷指令名称") },
-                    placeholder = { Text("例如：返回主城") },
+                    label = { Text("快捷名称") },
+                    placeholder = { Text("例如：返回主城或打招呼") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
-                    value = command,
-                    onValueChange = { command = it },
-                    label = { Text("输入的指令") },
-                    placeholder = { Text("例如：/spawn") },
+                    value = content,
+                    onValueChange = { content = it },
+                    label = { Text("发送内容") },
+                    placeholder = { Text("例如：/spawn 或 大家好") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    text = "以 / 开头会作为命令执行，其他内容会作为普通聊天发送。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(name.trim(), command.trim()) },
+                onClick = { onSave(name.trim(), content.trim()) },
                 enabled = canSave
             ) { Text("保存") }
         },
@@ -1578,12 +1607,17 @@ private fun CdkModuleCard(
 
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("福利兑换码", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "福利兑换码",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
                     Text(
                         "限时福利，记得及时兑换",
                         style = MaterialTheme.typography.bodySmall,
@@ -1597,7 +1631,7 @@ private fun CdkModuleCard(
             if (state.loading) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
-            OutlinedButton(
+            FilledTonalButton(
                 onClick = { showCustomCdkDialog = true },
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -1613,8 +1647,7 @@ private fun CdkModuleCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
-                state.entries.forEachIndexed { index, entry ->
-                    if (index > 0) HorizontalDivider()
+                state.entries.forEach { entry ->
                     CdkEntryItem(
                         entry = entry,
                         onCopy = { clipboardManager.setText(AnnotatedString(entry.code)) },
@@ -1628,11 +1661,12 @@ private fun CdkModuleCard(
     if (showCustomCdkDialog) {
         AlertDialog(
             onDismissRequest = { showCustomCdkDialog = false },
-            title = { Text("领取 CDK") },
+            icon = { Icon(Icons.Default.Info, contentDescription = null) },
+            title = { Text("手动领取兑换码") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                    "输入兑换码后，确认即可在当前服务器中领取。",
+                        "输入兑换码后，确认即可在当前服务器中领取。",
                         style = MaterialTheme.typography.bodySmall
                     )
                     OutlinedTextField(
@@ -1640,7 +1674,8 @@ private fun CdkModuleCard(
                         onValueChange = { customCdk = it },
                         label = { Text("兑换码") },
                         placeholder = { Text("请输入兑换码") },
-                        singleLine = true
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             },
@@ -1675,40 +1710,111 @@ private fun CdkEntryItem(
         copied = false
     }
 
-    ListItem(
-        headlineContent = { Text(entry.title, fontWeight = FontWeight.SemiBold) },
-        supportingContent = {
-            Text(
-                listOfNotNull(
-                    entry.description.takeIf { it.isNotBlank() },
-                    "CDK：${entry.code}",
-                    cdkWindowText(entry)
-                ).joinToString("\n")
-            )
-        },
-        leadingContent = { Icon(Icons.Default.Info, contentDescription = null) },
-        trailingContent = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = {
-                    onCopy()
-                    copied = true
-                }) {
-                    Text(if (copied) "已复制" else "复制")
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Info,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
-                FilledTonalButton(onClick = onClaim) {
-                    Text("领取")
+                Text(
+                    entry.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            entry.description.takeIf { it.isNotBlank() }?.let { description ->
+                Text(
+                    description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            ) {
+                Text(
+                    entry.code,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            cdkWindowText(entry)?.let { windowText ->
+                Text(
+                    windowText,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        onCopy()
+                        copied = true
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(if (copied) "已复制" else "复制兑换码")
+                }
+                FilledTonalButton(
+                    onClick = onClaim,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("立即领取")
                 }
             }
         }
-    )
+    }
 }
 
 private fun cdkWindowText(entry: CdkEntry): String? = when {
-    !entry.startsAt.isNullOrBlank() && !entry.endsAt.isNullOrBlank() -> "显示时间：${entry.startsAt} ~ ${entry.endsAt}"
-    !entry.startsAt.isNullOrBlank() -> "开始显示：${entry.startsAt}"
-    !entry.endsAt.isNullOrBlank() -> "显示截止：${entry.endsAt}"
+    !entry.startsAt.isNullOrBlank() && !entry.endsAt.isNullOrBlank() ->
+        "可领取时间：${formatCdkTime(entry.startsAt)} ~ ${formatCdkTime(entry.endsAt)}"
+    !entry.startsAt.isNullOrBlank() -> "开始时间：${formatCdkTime(entry.startsAt)}"
+    !entry.endsAt.isNullOrBlank() -> "截止时间：${formatCdkTime(entry.endsAt)}"
     else -> null
 }
+
+private fun formatCdkTime(value: String): String = runCatching {
+    val parsed = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX", Locale.US).parse(value)
+        ?: return@runCatching value
+    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(parsed)
+}.getOrDefault(value)
 
 @Composable
 private fun PluginCenterScreen(vm: MainViewModel) {

@@ -55,6 +55,10 @@ data class AccountSummary(
     val isOffline: Boolean
 )
 
+/** 当前使用的账号始终置顶，其余账号保持原有存储顺序。 */
+internal fun activeAccountFirst(accounts: List<AccountSummary>): List<AccountSummary> =
+    accounts.filter(AccountSummary::isActive) + accounts.filterNot(AccountSummary::isActive)
+
 /**
  * 玩家签名证书（强制签名模式必需）。
  *

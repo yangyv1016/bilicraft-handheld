@@ -5,8 +5,8 @@ import org.junit.Test
 
 class QuickCommandConfigTest {
     @Test
-    fun `command input gets a leading slash`() {
-        assertEquals("/signin click", QuickCommandConfig.normalizeCommand(" signin click "))
+    fun `plain chat content stays plain`() {
+        assertEquals("大家好", QuickCommandConfig.normalizeCommand("  大家好  "))
     }
 
     @Test

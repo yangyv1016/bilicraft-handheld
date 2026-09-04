@@ -57,7 +57,7 @@ internal fun normalizeAnnouncements(entries: List<AnnouncementEntry>): List<Anno
 
 class AnnouncementRepository(
     context: Context,
-    private val indexUrl: String = DEFAULT_INDEX_URL,
+    private val indexUrls: List<String> = DEFAULT_INDEX_URLS,
     private val client: OkHttpClient = OkHttpClient.Builder()
         .callTimeout(15, TimeUnit.SECONDS)
         .build(),
@@ -78,10 +78,7 @@ class AnnouncementRepository(
     suspend fun refresh(): Result<Int> = withContext(Dispatchers.IO) {
         runCatching {
             _state.value = _state.value.copy(loading = true, errorMessage = null)
-            val body = client.newCall(Request.Builder().url(indexUrl).build()).execute().use { response ->
-                if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
-                response.body?.string() ?: throw IOException("empty body")
-            }
+            val body = downloadIndex()
             val index = json.decodeFromString<AnnouncementIndex>(body)
             cacheFile.writeText(json.encodeToString(AnnouncementIndex.serializer(), index))
             publish(index, loading = false, errorMessage = null)
@@ -99,6 +96,21 @@ class AnnouncementRepository(
         }
     }
 
+    private fun downloadIndex(): String {
+        var lastFailure: IOException? = null
+        for (indexUrl in indexUrls.distinct()) {
+            try {
+                return client.newCall(Request.Builder().url(indexUrl).build()).execute().use { response ->
+                    if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+                    response.body?.string() ?: throw IOException("empty body")
+                }
+            } catch (failure: IOException) {
+                lastFailure = failure
+            }
+        }
+        throw lastFailure ?: IOException("no announcement source configured")
+    }
+
     private fun publish(index: AnnouncementIndex, loading: Boolean, errorMessage: String?) {
         _state.value = AnnouncementState(
             loading = loading,
@@ -110,5 +122,7 @@ class AnnouncementRepository(
 
     companion object {
         const val DEFAULT_INDEX_URL = "https://bccdn.yanguiofficial.cn/announcements/index.json"
+        const val PAGES_INDEX_URL = "https://bilicraft-cdn.pages.dev/announcements/index.json"
+        val DEFAULT_INDEX_URLS = listOf(DEFAULT_INDEX_URL, PAGES_INDEX_URL)
     }
 }

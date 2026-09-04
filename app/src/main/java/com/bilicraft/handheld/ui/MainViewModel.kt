@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.bilicraft.handheld.AppContainer
 import com.bilicraft.handheld.BuildConfig
+import com.bilicraft.handheld.announcement.AnnouncementState
 import com.bilicraft.handheld.appicon.AppIcon
 import com.bilicraft.handheld.appicon.AppIconCatalog
 import com.bilicraft.handheld.auth.AccountSummary
@@ -76,6 +77,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val externalPluginManager = AppContainer.externalPluginManager
     private val officialPluginMarket = AppContainer.officialPluginMarket
     private val cdkRepository = AppContainer.cdkRepository
+    private val announcementRepository = AppContainer.announcementRepository
 
     val authState: StateFlow<AuthState> = auth.state
     val updateState: StateFlow<UpdateState> = updateManager.state
@@ -89,6 +91,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val externalPluginEntrypoints: StateFlow<List<ExternalPluginEntrypoint>> = externalPluginManager.entrypoints
     val officialMarket: StateFlow<OfficialPluginMarketState> = officialPluginMarket.state
     val cdkState = cdkRepository.state
+    val announcementState: StateFlow<AnnouncementState> = announcementRepository.state
 
     private val _serverRuntime = MutableStateFlow(ServerRuntimeUiState())
     val serverRuntime: StateFlow<ServerRuntimeUiState> = _serverRuntime.asStateFlow()
@@ -146,6 +149,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             cdkRepository.loadCache()
             cdkRepository.refresh()
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            announcementRepository.loadCache()
+            announcementRepository.refresh()
         }
         viewModelScope.launch { mirrorSessionEvents() }
         viewModelScope.launch { mirrorCommandSuggestions() }
@@ -607,6 +614,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshCdkActiveWindow() {
         cdkRepository.refreshActiveWindow()
+    }
+
+    fun refreshAnnouncements() {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { announcementRepository.refresh() }
+            _uiMessage.value = result.fold(
+                onSuccess = { count -> if (count > 0) "公告已刷新，共 $count 条" else "公告已刷新，暂无内容" },
+                onFailure = { "公告刷新失败：${it.message ?: "未知错误"}" }
+            )
+        }
     }
 
     fun installOfficialPlugin(pluginId: String) {

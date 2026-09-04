@@ -32,6 +32,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
@@ -127,6 +129,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.bilicraft.handheld.announcement.AnnouncementEntry
+import com.bilicraft.handheld.announcement.AnnouncementState
 import com.bilicraft.handheld.appicon.AppIcon
 import com.bilicraft.handheld.cdk.CdkEntry
 import com.bilicraft.handheld.cdk.CdkState
@@ -1359,10 +1363,12 @@ private fun SettingsScreen(vm: MainViewModel) {
     val accountList by vm.accounts.collectAsStateWithLifecycle()
     val updateState by vm.updateState.collectAsStateWithLifecycle()
     val cdkState by vm.cdkState.collectAsStateWithLifecycle()
+    val announcementState by vm.announcementState.collectAsStateWithLifecycle()
     var removingAccountUuid by remember { mutableStateOf<String?>(null) }
     var showSourcePicker by remember { mutableStateOf(false) }
     var showThemePicker by remember { mutableStateOf(false) }
     var showIconPicker by remember { mutableStateOf(false) }
+    var showAnnouncementHistory by remember { mutableStateOf(false) }
     var aboutTapCount by remember { mutableIntStateOf(0) }
     val currentAppIcon by vm.currentAppIcon.collectAsStateWithLifecycle()
 
@@ -1512,6 +1518,15 @@ private fun SettingsScreen(vm: MainViewModel) {
                 )
             )
         }
+
+        item { SectionTitle("公告") }
+        item {
+            AnnouncementModuleCard(
+                state = announcementState,
+                onRefresh = vm::refreshAnnouncements,
+                onOpenHistory = { showAnnouncementHistory = true }
+            )
+        }
         item { Spacer(Modifier.height(24.dp)) }
     }
 
@@ -1566,6 +1581,13 @@ private fun SettingsScreen(vm: MainViewModel) {
         onDismiss = vm::dismissUpdate
     )
 
+    if (showAnnouncementHistory) {
+        AnnouncementHistoryDialog(
+            entries = announcementState.entries,
+            onDismiss = { showAnnouncementHistory = false }
+        )
+    }
+
     removingAccountUuid?.let { uuid ->
         val target = accountList.firstOrNull { it.uuid == uuid }
         AlertDialog(
@@ -1595,6 +1617,138 @@ private fun SettingsScreen(vm: MainViewModel) {
 }
 
 @Composable
+private fun AnnouncementModuleCard(
+    state: AnnouncementState,
+    onRefresh: () -> Unit,
+    onOpenHistory: () -> Unit
+) {
+    val latest = state.entries.firstOrNull()
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = latest?.title ?: "官方公告",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    latest?.let {
+                        Text(
+                            text = "${announcementTypeText(it)} · ${announcementDateText(it.publishedAt)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                IconButton(onClick = onRefresh, enabled = !state.loading) {
+                    Icon(Icons.Default.Refresh, contentDescription = "刷新公告")
+                }
+            }
+
+            if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+
+            Text(
+                text = latest?.content ?: if (state.loading) "正在加载公告…" else "暂时没有公告",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            state.errorMessage?.let { message ->
+                Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+
+            OutlinedButton(
+                onClick = onOpenHistory,
+                enabled = state.entries.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (state.entries.isEmpty()) "暂无历史公告" else "查看历史公告（${state.entries.size}）")
+            }
+        }
+    }
+}
+
+@Composable
+private fun AnnouncementHistoryDialog(
+    entries: List<AnnouncementEntry>,
+    onDismiss: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(0.92f).widthIn(max = 520.dp),
+            shape = RoundedCornerShape(28.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Column(Modifier.fillMaxWidth().padding(20.dp)) {
+                Text("历史公告", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "共 ${entries.size} 条，版本更新与独立公告均由 CDN 保存。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(14.dp))
+                Column(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    entries.forEach { entry ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(entry.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "${announcementTypeText(entry)} · ${announcementDateText(entry.publishedAt)}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(entry.content, style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text("关闭") }
+            }
+        }
+    }
+}
+
+private fun announcementTypeText(entry: AnnouncementEntry): String =
+    if (entry.type == AnnouncementEntry.TYPE_RELEASE) {
+        entry.versionName?.takeIf { it.isNotBlank() }?.let { "版本更新 $it" } ?: "版本更新"
+    } else {
+        "官方公告"
+    }
+
+private fun announcementDateText(value: String): String =
+    value.take(10).replace('-', '.')
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
 private fun CdkModuleCard(
     state: CdkState,
     onRefresh: () -> Unit,
@@ -1604,13 +1758,30 @@ private fun CdkModuleCard(
     val clipboardManager = LocalClipboardManager.current
     var showCustomCdkDialog by rememberSaveable { mutableStateOf(false) }
     var customCdk by rememberSaveable { mutableStateOf("") }
+    var copiedEntryId by rememberSaveable { mutableStateOf<String?>(null) }
+    val entryCount = state.entries.size
+    val pagerState = rememberPagerState(pageCount = { entryCount.coerceAtLeast(1) })
+    val selectedEntry = state.entries.getOrNull(pagerState.currentPage)
+
+    LaunchedEffect(entryCount) {
+        val lastAvailablePage = state.entries.lastIndex.coerceAtLeast(0)
+        if (pagerState.currentPage > lastAvailablePage) {
+            pagerState.scrollToPage(lastAvailablePage)
+        }
+    }
+
+    LaunchedEffect(copiedEntryId) {
+        if (copiedEntryId == null) return@LaunchedEffect
+        delay(CDK_COPY_FEEDBACK_MS)
+        copiedEntryId = null
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -1619,7 +1790,12 @@ private fun CdkModuleCard(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        "限时福利，记得及时兑换",
+                        when {
+                            state.loading && entryCount == 0 -> "正在获取可领取内容"
+                            entryCount > 1 -> "共 $entryCount 个可领取内容，左右滑动切换"
+                            entryCount == 1 -> "当前有 1 个可领取内容"
+                            else -> "限时福利，记得及时兑换"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1631,29 +1807,62 @@ private fun CdkModuleCard(
             if (state.loading) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
+            state.errorMessage?.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxWidth().height(244.dp),
+                pageSpacing = 12.dp
+            ) { page ->
+                val entry = state.entries.getOrNull(page)
+                if (entry == null) {
+                    CdkEmptyPage(loading = state.loading)
+                } else {
+                    CdkEntryPage(entry)
+                }
+            }
+
+            if (entryCount > 1) {
+                CdkPageIndicator(
+                    pageCount = entryCount,
+                    currentPage = pagerState.currentPage.coerceIn(0, entryCount - 1)
+                )
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            selectedEntry?.let { entry ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            clipboardManager.setText(AnnotatedString(entry.code))
+                            copiedEntryId = entry.id
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(if (copiedEntryId == entry.id) "已复制" else "复制兑换码")
+                    }
+                    FilledTonalButton(
+                        onClick = { onClaim(entry.code) },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("立即领取")
+                    }
+                }
+            }
+
             FilledTonalButton(
                 onClick = { showCustomCdkDialog = true },
                 modifier = Modifier.fillMaxWidth()
             ) {
+                Icon(Icons.Default.Edit, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
                 Text("手动输入兑换码")
-            }
-            state.errorMessage?.takeIf { it.isNotBlank() }?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-            }
-            if (state.entries.isEmpty() && !state.loading) {
-                Text(
-                    "暂时没有可领取的兑换码，稍后再来看看。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                state.entries.forEach { entry ->
-                    CdkEntryItem(
-                        entry = entry,
-                        onCopy = { clipboardManager.setText(AnnotatedString(entry.code)) },
-                        onClaim = { onClaim(entry.code) }
-                    )
-                }
             }
         }
     }
@@ -1697,26 +1906,14 @@ private fun CdkModuleCard(
 }
 
 @Composable
-private fun CdkEntryItem(
-    entry: CdkEntry,
-    onCopy: () -> Unit,
-    onClaim: () -> Unit
-) {
-    var copied by remember(entry.id, entry.code) { mutableStateOf(false) }
-
-    LaunchedEffect(copied) {
-        if (!copied) return@LaunchedEffect
-        delay(CDK_COPY_FEEDBACK_MS)
-        copied = false
-    }
-
+private fun CdkEntryPage(entry: CdkEntry) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxSize(),
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            modifier = Modifier.fillMaxSize().padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(
@@ -1740,7 +1937,7 @@ private fun CdkEntryItem(
                 }
                 Text(
                     entry.title,
-                    style = MaterialTheme.typography.titleSmall,
+                    style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f)
                 )
@@ -1750,17 +1947,25 @@ private fun CdkEntryItem(
                 Text(
                     description,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
                     .background(MaterialTheme.colorScheme.secondaryContainer)
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
+                Text(
+                    "兑换码",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
                 Text(
                     entry.code,
                     style = MaterialTheme.typography.titleSmall,
@@ -1778,27 +1983,72 @@ private fun CdkEntryItem(
                 )
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                OutlinedButton(
-                    onClick = {
-                        onCopy()
-                        copied = true
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(if (copied) "已复制" else "复制兑换码")
-                }
-                FilledTonalButton(
-                    onClick = onClaim,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("立即领取")
-                }
-            }
         }
+    }
+}
+
+@Composable
+private fun CdkEmptyPage(loading: Boolean) {
+    Card(
+        modifier = Modifier.fillMaxSize(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                Icons.Default.Info,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(32.dp)
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                if (loading) "正在获取兑换码" else "暂时没有可领取的兑换码",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (loading) "请稍候" else "你仍然可以手动输入兑换码",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun CdkPageIndicator(pageCount: Int, currentPage: Int) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
+    ) {
+        repeat(pageCount) { page ->
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 3.dp)
+                    .size(if (page == currentPage) 9.dp else 6.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (page == currentPage) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.outlineVariant
+                        }
+                    )
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            "${currentPage + 1} / $pageCount",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -2278,7 +2528,20 @@ private fun UpdateDialog(
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (state.progress >= 0f) {
                         LinearProgressIndicator(progress = { state.progress }, modifier = Modifier.fillMaxWidth())
-                        Text("${(state.progress * 100).toInt()}%")
+                        val percent = (state.progress * 100).toInt().coerceIn(0, 100)
+                        val totalBytes = state.info.apkSizeBytes
+                        val downloadedBytes = if (totalBytes > 0L) {
+                            (state.progress * totalBytes).toLong().coerceIn(0L, totalBytes)
+                        } else {
+                            0L
+                        }
+                        Text(
+                            if (totalBytes > 0L) {
+                                "$percent% · ${formatDownloadSize(downloadedBytes)} / ${formatDownloadSize(totalBytes)}"
+                            } else {
+                                "$percent%"
+                            }
+                        )
                     } else {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         Text("下载中…")
@@ -2308,6 +2571,9 @@ private fun UpdateDialog(
         is UpdateState.Idle -> Unit
     }
 }
+
+private fun formatDownloadSize(bytes: Long): String =
+    String.format(Locale.getDefault(), "%.1f MB", bytes / (1024.0 * 1024.0))
 
 /**
  * 更新下载源选择：单选列表，选中即回传并落盘。

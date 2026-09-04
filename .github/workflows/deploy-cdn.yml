@@ -7,8 +7,12 @@ on:
     paths:
       - '.github/workflows/deploy-cdn.yml'
       - 'scripts/build-cdn.mjs'
+      - 'scripts/announcement-utils.mjs'
+      - 'scripts/announcement-utils.test.mjs'
+      - 'scripts/publish-announcement.mjs'
       - 'scripts/cdn-worker.mjs'
       - 'scripts/cdn-worker.test.mjs'
+      - 'announcements/manual.json'
   schedule:
     - cron: '17 * * * *'
   workflow_run:
@@ -38,7 +42,7 @@ jobs:
           node-version: '22'
 
       - name: Test CDN worker
-        run: node --test scripts/cdn-worker.test.mjs
+        run: node --test scripts/cdn-worker.test.mjs scripts/announcement-utils.test.mjs
 
       - name: Build CDN files
         env:

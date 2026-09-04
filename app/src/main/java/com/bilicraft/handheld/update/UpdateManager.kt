@@ -59,7 +59,12 @@ class UpdateManager(
         cleanDownloadDir()
         val target = File(downloadDir, "bilicraft-${info.versionName}.apk")
         _state.value = UpdateState.Downloading(info, 0f)
-        val result = client.downloadApk(info.apkDownloadUrl, target, source::rewrite) { progress ->
+        val result = client.downloadApk(
+            url = info.apkDownloadUrl,
+            targetFile = target,
+            expectedSizeBytes = info.apkSizeBytes,
+            rewrite = source::rewrite
+        ) { progress ->
             _state.value = UpdateState.Downloading(info, progress)
         }
         _state.value = when (result) {

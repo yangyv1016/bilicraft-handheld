@@ -9,6 +9,13 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+/** 响应未携带 Content-Length 时，使用 Release API 提供的资产大小。 */
+internal fun resolveDownloadTotalBytes(responseSize: Long, releaseAssetSize: Long): Long = when {
+    responseSize > 0L -> responseSize
+    releaseAssetSize > 0L -> releaseAssetSize
+    else -> -1L
+}
+
 /**
  * GitHub 更新的 HTTP 变换实现。
  *
@@ -68,6 +75,7 @@ class UpdateClient(
     suspend fun downloadApk(
         url: String,
         targetFile: File,
+        expectedSizeBytes: Long = 0L,
         rewrite: (String) -> String = { it },
         onProgress: (Float) -> Unit
     ): Result<File> = withContext(Dispatchers.IO) {
@@ -78,18 +86,30 @@ class UpdateClient(
                 if (!resp.isSuccessful || body == null) {
                     return@withContext Result.Err("下载失败(${resp.code})")
                 }
-                val total = body.contentLength()
+                // Cloudflare Worker 拼接分包时通常会以 chunked 方式传输，OkHttp 因此拿不到
+                // Content-Length。Release API 中的 asset.size 仍是完整 APK 的准确大小。
+                val total = resolveDownloadTotalBytes(body.contentLength(), expectedSizeBytes)
+                var readTotal = 0L
                 body.byteStream().use { input ->
                     targetFile.outputStream().use { output ->
                         val buffer = ByteArray(DOWNLOAD_BUFFER_SIZE)
-                        var readTotal = 0L
                         var read: Int
                         while (input.read(buffer).also { read = it } != -1) {
                             output.write(buffer, 0, read)
                             readTotal += read
-                            onProgress(if (total > 0) readTotal.toFloat() / total else -1f)
+                            onProgress(
+                                if (total > 0) {
+                                    (readTotal.toDouble() / total.toDouble()).toFloat().coerceIn(0f, 1f)
+                                } else {
+                                    -1f
+                                }
+                            )
                         }
                     }
+                }
+                if (total > 0L && readTotal != total) {
+                    targetFile.delete()
+                    return@withContext Result.Err("下载不完整（${readTotal}/${total} 字节）")
                 }
                 Result.Ok(targetFile)
             }

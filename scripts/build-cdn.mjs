@@ -3,6 +3,11 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  mergeAnnouncements,
+  normalizeManualIndex,
+  releaseToAnnouncement
+} from "./announcement-utils.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = path.resolve(rootDir, process.env.OUT_DIR ?? "cdn-dist");
@@ -49,6 +54,7 @@ await writeText(
   "/_worker.js",
   await readFile(path.resolve(rootDir, "scripts/cdn-worker.mjs"), "utf8")
 );
+const announcementIndex = await mirrorAnnouncements();
 await writeJson(`/app/releases/${tag}/manifest.json`, {
   schemaVersion: 2,
   tag,
@@ -125,7 +131,8 @@ await writeJson("/meta/sync-state.json", {
     apkSize,
     pluginPackages: pluginMarket.mirroredPackages,
     discoveredPlugins: pluginMarket.discoveredPlugins,
-    cdkEntries: cdkIndex.entries
+    cdkEntries: cdkIndex.entries,
+    announcements: announcementIndex.announcements.length
   }
 });
 
@@ -137,6 +144,23 @@ console.log(`SHA-256: ${apkSha256}`);
 console.log(`Plugin packages: ${pluginMarket.mirroredPackages}`);
 console.log(`Discovered plugins: ${pluginMarket.discoveredPlugins}`);
 console.log(`CDK entries: ${cdkIndex.entries}`);
+console.log(`Announcements: ${announcementIndex.announcements.length}`);
+
+async function mirrorAnnouncements() {
+  const manualPath = path.resolve(rootDir, "announcements/manual.json");
+  const manual = normalizeManualIndex(JSON.parse(await readFile(manualPath, "utf8")));
+  const releases = await fetchJson(
+    `https://api.github.com/repos/${appOwner}/${appRepo}/releases?per_page=50`
+  );
+  if (!Array.isArray(releases)) throw new Error("GitHub releases response must be an array.");
+  const announcements = mergeAnnouncements(
+    releases.map(releaseToAnnouncement).filter(Boolean),
+    manual.announcements
+  );
+  const output = { schemaVersion: 1, updatedAt: now, announcements };
+  await writeJson("/announcements/index.json", output);
+  return output;
+}
 
 async function mirrorPluginMarketIndex() {
   const market = await readPluginMarketIndex();

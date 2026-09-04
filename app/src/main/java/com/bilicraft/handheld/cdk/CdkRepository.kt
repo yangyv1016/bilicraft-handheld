@@ -88,10 +88,15 @@ class CdkRepository(
             currentIndex = index
             publish(index, loading = false, errorMessage = null)
             _state.value.entries.size
-        }.onFailure { error ->
+        }.onFailure {
+            val hasCachedEntries = _state.value.entries.isNotEmpty()
             _state.value = _state.value.copy(
                 loading = false,
-                errorMessage = "CDK 配置不可用：${error.message ?: "网络请求失败"}"
+                errorMessage = if (hasCachedEntries) {
+                    "刷新失败，当前显示本地兑换码"
+                } else {
+                    "兑换码加载失败，请检查网络后重试"
+                }
             )
         }
     }

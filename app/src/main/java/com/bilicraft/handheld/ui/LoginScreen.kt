@@ -53,7 +53,7 @@ fun LoginScreen(vm: MainViewModel) {
     val loginOverlay by vm.loginOverlay.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    BackHandler(enabled = loginOverlay) {
+    BackHandler {
         vm.cancelLoginOverlay()
     }
 
@@ -69,9 +69,9 @@ fun LoginScreen(vm: MainViewModel) {
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center
         )
-        if (loginOverlay) {
-            Spacer(Modifier.height(12.dp))
-            OutlinedButton(onClick = vm::cancelLoginOverlay) { Text("返回主界面") }
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(onClick = vm::cancelLoginOverlay) {
+            Text(if (loginOverlay) "返回主界面" else "暂不登录")
         }
         Spacer(Modifier.height(32.dp))
 

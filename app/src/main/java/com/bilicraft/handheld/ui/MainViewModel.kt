@@ -108,6 +108,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _loggedIn = MutableStateFlow(auth.currentSession() != null)
     val loggedIn: StateFlow<Boolean> = _loggedIn.asStateFlow()
 
+    // 仅在本次应用会话内跳过登录，不改变真实账号状态或保存凭据。
+    private val _loginSkipped = MutableStateFlow(false)
+    val loginSkipped: StateFlow<Boolean> = _loginSkipped.asStateFlow()
+
     private val _forceSigning = MutableStateFlow(false)
     val forceSigning: StateFlow<Boolean> = _forceSigning.asStateFlow()
 
@@ -231,6 +235,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         loginJob = null
         _loginOverlay.value = false
         _loggedIn.value = auth.currentSession() != null
+        _loginSkipped.value = !_loggedIn.value
     }
 
     fun refreshToken() {
@@ -514,6 +519,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         loginJob?.cancel()
         loginJob = null
         auth.prepareLogin()
+        _loginSkipped.value = false
         _loginOverlay.value = true
     }
 

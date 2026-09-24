@@ -41,17 +41,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * 根导航：极简双屏切换。未登录 → 登录页；已登录 → 主控页。
- * 不引入 Navigation 组件，因为只有两个状态，一个布尔足够，避免过度设计。
+ * 根导航：首次未登录时展示登录页；已登录或暂不登录时进入主控页。
+ * 从主控页添加账号时，仍可打开登录页并返回。
  */
 @Composable
 fun AppRoot(vm: MainViewModel) {
     val loggedIn by vm.loggedIn.collectAsStateWithLifecycle()
+    val loginSkipped by vm.loginSkipped.collectAsStateWithLifecycle()
     val loginOverlay by vm.loginOverlay.collectAsStateWithLifecycle()
     var showSplash by rememberSaveable { mutableStateOf(true) }
 
     Box(Modifier.fillMaxSize()) {
-        if (loggedIn && !loginOverlay) {
+        if ((loggedIn || loginSkipped) && !loginOverlay) {
             MainScreen(vm)
         } else {
             LoginScreen(vm)

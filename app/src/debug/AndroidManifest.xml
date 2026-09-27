@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name="com.bilicraft.handheld.ui.PlayerHeadPreviewActivity"
+            android:screenOrientation="portrait" android:exported="true" android:label="玩家头颅验收" />
+        <activity android:name="com.bilicraft.handheld.ui.InventoryTestActivity"
+            android:screenOrientation="portrait" android:exported="true" android:label="本地背包验收" />
+        <activity android:name="com.bilicraft.handheld.ui.ResourcePackPreviewActivity"
+            android:screenOrientation="portrait" android:exported="true" android:label="资源包验收" />
+        <activity android:name="com.bilicraft.handheld.ui.ChatFeaturePreviewActivity"
+            android:screenOrientation="portrait"
+            android:exported="true" android:label="聊天交互验收" />
+    </application>
+</manifest>

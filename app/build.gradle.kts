@@ -240,4 +240,6 @@ dependencies {
     implementation("org.mozilla:rhino:1.7.15")
 
     testImplementation("junit:junit:4.13.2")
+    // JVM tests exercise the same JSON component parser as Android, not android.jar stubs.
+    testImplementation("org.json:json:20240303")
 }

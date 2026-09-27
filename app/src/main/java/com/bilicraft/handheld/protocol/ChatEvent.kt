@@ -29,8 +29,37 @@ data class ChatSpan(
     val bold: Boolean = false,
     val italic: Boolean = false,
     val underline: Boolean = false,
-    val strikethrough: Boolean = false
+    val strikethrough: Boolean = false,
+    val font: String = "minecraft:default",
+    val hover: ChatHover? = null,
+    val click: ChatClick? = null
 )
+
+sealed interface ChatClick {
+    data class RunCommand(val command: String) : ChatClick
+    data class SuggestCommand(val command: String) : ChatClick
+}
+
+sealed interface ChatHover {
+    data class Text(val spans: List<ChatSpan>) : ChatHover
+    data class Item(val item: ItemDetails) : ChatHover
+}
+
+/** A server-supplied item snapshot. It is not an actionable inventory slot. */
+data class ItemDetails(
+    val id: String,
+    val count: Int,
+    val components: NbtTag.NbtCompound = NbtTag.NbtCompound(emptyMap())
+) {
+    val displayName: List<ChatSpan>
+        get() {
+            val name = components.entries["minecraft:custom_name"] ?: components.entries["minecraft:item_name"]
+            if (name != null) return ChatComponent.spansFromNbt(name)
+            val key = id.replace(':', '.')
+            return listOf(ChatSpan(MinecraftTranslations.templateFor("item.$key")
+                ?: MinecraftTranslations.templateFor("block.$key") ?: id))
+        }
+}
 
 /** 连接生命周期状态（UI 展示 + service 决定是否重连） */
 sealed interface ConnectionState {

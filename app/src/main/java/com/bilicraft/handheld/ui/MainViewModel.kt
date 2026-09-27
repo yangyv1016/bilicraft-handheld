@@ -80,6 +80,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val announcementRepository = AppContainer.announcementRepository
 
     val authState: StateFlow<AuthState> = auth.state
+    val resourcePacks = session.resourcePacks
+    val inventory = AppContainer.session.inventory
+    fun performInventoryAction(serverId: String, action: com.bilicraft.handheld.protocol.InventoryAction, revision: Long) =
+        AppContainer.session.performInventoryAction(serverId, action, revision)
+    fun selectHotbar(serverId: String, slot: Int) = AppContainer.session.selectHotbar(serverId, slot)
+    fun clickServerMenu(serverId: String, generation: Long, slot: Int, button: Int, revision: Long) =
+        session.clickServerMenu(serverId, generation, slot, button, revision)
+    fun closeServerMenu(serverId: String, generation: Long) = session.closeServerMenu(serverId, generation)
+
+    fun acceptResourcePack(request: com.bilicraft.handheld.protocol.ResourcePackRequest) = session.acceptResourcePack(request)
+    fun declineResourcePack(request: com.bilicraft.handheld.protocol.ResourcePackRequest) = session.declineResourcePack(request)
     val updateState: StateFlow<UpdateState> = updateManager.state
     val accounts: StateFlow<List<AccountSummary>> = auth.accounts
     val servers: StateFlow<List<ServerConfig>> = uiConfigRepo.servers

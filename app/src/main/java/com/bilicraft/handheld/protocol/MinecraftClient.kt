@@ -55,10 +55,143 @@ class MinecraftClient(
     private val accessToken: String,
     private val playerName: String,
     private val playerUuid: String,
+    private val inventoryCodec: InventoryCodec? = null,
     private val offlineAccount: Boolean = false,
     private val signingMode: ChatSigningMode = ChatSigningMode.UNSIGNED,
     private val certificate: com.bilicraft.handheld.auth.PlayerCertificate? = null
 ) {
+    private val inventoryTracker = inventoryCodec?.takeIf { protocolNumber == 774 }?.let { InventoryTracker(it) }
+    val inventory: StateFlow<InventoryState> = inventoryTracker?.state ?: MutableStateFlow(InventoryState())
+
+    private var inventoryClicks = emptyList<InventoryClick>()
+    private var inventoryTimeout: ScheduledFuture<*>? = null
+
+    private fun resetInventory() {
+        inventoryTimeout?.cancel(false)
+        inventoryClicks = emptyList()
+        inventoryTracker?.onSnapshot = null
+        inventoryTracker?.reset()
+    }
+
+    fun performInventoryAction(action: InventoryAction, revision: Long) {
+        val ch = channel ?: return
+        ch.eventLoop().execute {
+            val tracker = inventoryTracker ?: return@execute
+            val state = tracker.state.value
+            if (!ch.isActive || phase != Phase.PLAY || playerDead || state.busy) return@execute
+            if (state.revision != revision) {
+                tracker.status(false, "背包已变化，请重新选择物品")
+                return@execute
+            }
+            try {
+                inventoryClicks = InventoryActions.plan(state, action)
+            } catch (error: IllegalArgumentException) {
+                tracker.status(false, error.message)
+                return@execute
+            } catch (error: IllegalStateException) {
+                tracker.status(false, error.message)
+                return@execute
+            }
+            tracker.onSnapshot = {
+                inventoryTimeout?.cancel(false)
+                val snapshot = tracker.state.value
+                val expected = inventoryClicks.firstOrNull()
+                if (expected != null && snapshot.ready && snapshot.openContainer == 0 &&
+                    expected.expectedSlots.all { (slot, item) -> snapshot.slots[slot] == item } && snapshot.cursor == expected.expectedCursor) {
+                    inventoryClicks = inventoryClicks.drop(1)
+                    if (inventoryClicks.isEmpty()) tracker.status(false, "操作完成") else sendInventoryClick(ch)
+                } else {
+                    inventoryClicks = emptyList()
+                    tracker.status(false, "服务器未按预期执行，已停止；请核对背包及光标物品")
+                }
+                if (inventoryClicks.isEmpty()) tracker.onSnapshot = null
+            }
+            tracker.status(true, "正在等待服务器确认…")
+            sendInventoryClick(ch)
+        }
+    }
+
+    private fun sendInventoryClick(ch: Channel) {
+        val click = inventoryClicks.first()
+        val packet = ch.alloc().buffer().writeVarInt(palette.sbId(PacketKey.SB_INVENTORY_CLICK)!!)
+        packet.writeVarInt(0)
+        // No client-side prediction: a mismatched state requests the server's full authoritative
+        // snapshot after this click. Empty prediction maps avoid inventing component hashes.
+        // Vanilla/Paper handleContainerClick executes the action then broadcastFullState on mismatch.
+        packet.writeVarInt(-1)
+        packet.writeShort(click.slot).writeByte(click.button).writeVarInt(click.mode)
+        packet.writeVarInt(0).writeBoolean(false)
+        ch.writeAndFlush(packet)
+        inventoryTimeout = ch.eventLoop().schedule({
+            inventoryClicks = emptyList()
+            inventoryTracker?.onSnapshot = null
+            inventoryTracker?.requireResync("操作确认超时，未重试；请等待背包同步或重新连接")
+        }, 5, TimeUnit.SECONDS)
+    }
+
+    fun selectHotbar(slot: Int) {
+        val ch = channel ?: return
+        ch.eventLoop().execute {
+            val tracker = inventoryTracker ?: return@execute
+            if (slot !in 0..8 || !ch.isActive || phase != Phase.PLAY || playerDead || !tracker.state.value.ready || tracker.state.value.busy) return@execute
+            ch.writeAndFlush(ch.alloc().buffer().writeVarInt(palette.sbId(PacketKey.SB_HELD_SLOT)!!).writeShort(slot))
+            // The selected slot is client-controlled; the server can correct/reject it with CB_HELD_SLOT.
+            tracker.selectHotbar(slot)
+        }
+    }
+
+    fun clickServerMenu(generation: Long, slot: Int, button: Int, revision: Long) {
+        val ch = channel ?: return
+        ch.eventLoop().execute {
+            val tracker = inventoryTracker ?: return@execute
+            val state = tracker.state.value
+            val menu = state.menu ?: return@execute
+            if (!ch.isActive || phase != Phase.PLAY || playerDead || state.busy ||
+                menu.generation != generation || !menu.supported || !menu.ready ||
+                slot !in menu.slots.indices || button !in 0..1) return@execute
+            if (state.revision != revision) {
+                tracker.status(false, "菜单已更新，请重新选择")
+                return@execute
+            }
+            // Menu items can be plugin buttons: send one click, never plan follow-up moves.
+            tracker.onSnapshot = { container ->
+                val current = tracker.state.value
+                if (container == menu.id || current.menu?.generation != generation) {
+                    inventoryTimeout?.cancel(false)
+                    tracker.onSnapshot = null
+                    tracker.status(false, current.message)
+                }
+            }
+            tracker.status(true, "正在等待服务器响应…")
+            val packet = ch.alloc().buffer().writeVarInt(palette.sbId(PacketKey.SB_INVENTORY_CLICK)!!)
+            packet.writeVarInt(menu.id).writeVarInt(-1).writeShort(slot).writeByte(button).writeVarInt(0)
+            packet.writeVarInt(0).writeBoolean(false)
+            ch.writeAndFlush(packet)
+            inventoryTimeout = ch.eventLoop().schedule({
+                tracker.onSnapshot = null
+                tracker.menuTimeout()
+            }, 5, TimeUnit.SECONDS)
+        }
+    }
+
+    fun closeServerMenu(generation: Long) {
+        val ch = channel ?: return
+        ch.eventLoop().execute {
+            val tracker = inventoryTracker ?: return@execute
+            val state = tracker.state.value
+            val menu = state.menu ?: return@execute
+            if (!ch.isActive || phase != Phase.PLAY || menu.generation != generation) return@execute
+            if (state.busy) {
+                tracker.status(true, "请等待当前操作完成")
+                return@execute
+            }
+            inventoryTimeout?.cancel(false)
+            tracker.onSnapshot = null
+            ch.writeAndFlush(ch.alloc().buffer().writeVarInt(palette.sbId(PacketKey.SB_CLOSE_CONTAINER)!!).writeVarInt(menu.id))
+            tracker.closeMenu()
+        }
+    }
+
     // session 签名链状态（1.19.3+）：消息序号 + 会话 id。仅签名模式下有意义。
     private val messageChain = MessageChainState()
 
@@ -81,6 +214,27 @@ class MinecraftClient(
 
     private val _commandSuggestions = MutableStateFlow(CommandSuggestions.Empty)
     val commandSuggestions: StateFlow<CommandSuggestionState> = _commandSuggestions.asStateFlow()
+
+    private val _resourcePacks = MutableStateFlow<List<ResourcePackRequest>>(emptyList())
+    private var resourcePackRevision = 0L
+    val resourcePacks: StateFlow<List<ResourcePackRequest>> = _resourcePacks.asStateFlow()
+
+    fun respondResourcePack(request: ResourcePackRequest, status: ResourcePackStatus) {
+        val ch = channel ?: return
+        ch.eventLoop().execute {
+            if (!ch.isActive || _resourcePacks.value.none { it === request }) return@execute
+            val key = when (phase) {
+                Phase.CONFIGURATION -> PacketKey.SB_CONFIG_RESOURCE_PACK_RESPONSE
+                Phase.PLAY -> PacketKey.SB_RESOURCE_PACK_RESPONSE
+                else -> return@execute
+            }
+            val packetId = palette.sbId(key) ?: return@execute
+            val response = ch.alloc().buffer().writeVarInt(packetId)
+            response.writeUuid(request.id)
+            response.writeVarInt(status.wireId)
+            ch.writeAndFlush(response)
+        }
+    }
 
     private var channel: Channel? = null
     private var group: EventLoopGroup? = null
@@ -129,6 +283,8 @@ class MinecraftClient(
         commandSuggestionRequestId++
         latestCommandSuggestionInput = ""
         _commandSuggestions.value = CommandSuggestions.Empty
+        _resourcePacks.value = emptyList()
+        resetInventory()
         _state.value = ConnectionState.Disconnected
     }
 
@@ -395,6 +551,7 @@ class MinecraftClient(
 
         private fun handleConfiguration(ctx: ChannelHandlerContext, packetId: Int, buf: ByteBuf) {
             when (palette.cbKey(packetId, PacketPhase.CONFIGURATION)) {
+                PacketKey.CB_CONFIG_REGISTRY -> inventoryCodec?.readRegistry(buf)
                 PacketKey.CB_CONFIG_DISCONNECT -> failWithServerReason(ctx, buf, "配置阶段被服务器断开", componentIsNbt = palette.chatComponentIsNbt)
                 PacketKey.CB_CONFIG_KEEP_ALIVE -> {
                     // 回 keepalive（config 阶段），id 与收到的一致
@@ -412,7 +569,8 @@ class MinecraftClient(
                         ctx.writeAndFlush(reply)
                     }
                 }
-                PacketKey.CB_CONFIG_RESOURCE_PACK -> respondToConfigurationResourcePack(ctx, buf)
+                PacketKey.CB_CONFIG_RESOURCE_PACK -> receiveResourcePack(ctx, buf)
+                PacketKey.CB_CONFIG_REMOVE_RESOURCE_PACK -> removeResourcePack(buf)
                 PacketKey.CB_CONFIG_FINISH -> {
                     // 确认 config 结束，进入 play
                     palette.sbId(PacketKey.SB_CONFIG_FINISH_ACK)?.let {
@@ -426,20 +584,44 @@ class MinecraftClient(
             }
         }
 
-        /**
-         * 本客户端不渲染资源包，但要像 MCC 一样回复 accepted + successfully loaded，
-         * 否则要求资源包状态的代理服会一直停在 configuration。
-         */
-        private fun respondToConfigurationResourcePack(ctx: ChannelHandlerContext, buf: ByteBuf) {
-            val packId = buf.readUuid()
-            val responseId = palette.sbId(PacketKey.SB_CONFIG_RESOURCE_PACK_RESPONSE) ?: return
-            for (status in intArrayOf(3, 0)) { // ACCEPTED, SUCCESSFULLY_LOADED
-                val response = ctx.alloc().buffer().writeVarInt(responseId)
-                response.writeUuid(packId)
-                response.writeVarInt(status)
-                ctx.writeAndFlush(response)
+        private fun receiveResourcePack(ctx: ChannelHandlerContext, buf: ByteBuf) {
+            val request = ResourcePackRequest(
+                id = buf.readUuid(), url = buf.readString(), sha1 = buf.readString(),
+                required = buf.readBoolean(),
+                prompt = if (buf.readBoolean()) readComponent(buf).first else emptyList(),
+                revision = ++resourcePackRevision
+            )
+            if (protocolNumber != 774) {
+                palette.sbId(PacketKey.SB_CONFIG_RESOURCE_PACK_RESPONSE)?.let { id ->
+                    val response = ctx.alloc().buffer().writeVarInt(id)
+                    response.writeUuid(request.id)
+                    response.writeVarInt(ResourcePackStatus.Declined.wireId)
+                    ctx.writeAndFlush(response)
+                }
+                _incoming.tryEmit(ChatEvent("当前资源包支持 Minecraft 1.21.11，请选择该版本后重新连接", ""))
+                return
             }
-            Log.i(LOG_TAG, "已回应配置阶段资源包状态")
+            _resourcePacks.value = _resourcePacks.value.filterNot { it.id == request.id } + request
+            if (_resourcePacks.value.size > 8) {
+                _state.value = ConnectionState.Failed("服务器同时下发的资源包超过 8 个", retriable = false)
+                ctx.close()
+                return
+            }
+            if (phase == Phase.CONFIGURATION) {
+                // The ordinary login timeout must allow time for consent and a real download.
+                setupTimeout?.cancel(false)
+                setupTimeout = ctx.executor().schedule({
+                    if (phase == Phase.CONFIGURATION && ctx.channel().isActive) {
+                        _state.value = ConnectionState.Failed("资源包处理超时，请重新连接", retriable = false)
+                        ctx.close()
+                    }
+                }, 300, TimeUnit.SECONDS)
+            }
+        }
+
+        private fun removeResourcePack(buf: ByteBuf) {
+            val id = if (buf.readBoolean()) buf.readUuid() else null
+            _resourcePacks.value = if (id == null) emptyList() else _resourcePacks.value.filterNot { it.id == id }
         }
 
         /**
@@ -457,6 +639,9 @@ class MinecraftClient(
 
         private fun handlePlay(ctx: ChannelHandlerContext, packetId: Int, buf: ByteBuf) {
             when (palette.cbKey(packetId, PacketPhase.PLAY)) {
+                PacketKey.CB_INVENTORY_CONTENT, PacketKey.CB_INVENTORY_SLOT, PacketKey.CB_INVENTORY_CURSOR,
+                PacketKey.CB_PLAYER_INVENTORY, PacketKey.CB_HELD_SLOT, PacketKey.CB_OPEN_CONTAINER,
+                PacketKey.CB_CLOSE_CONTAINER -> inventoryTracker?.receive(palette.cbKey(packetId, PacketPhase.PLAY)!!, buf)
                 PacketKey.CB_PLAY_DISCONNECT -> failWithServerReason(ctx, buf, "被服务器断开", componentIsNbt = palette.chatComponentIsNbt)
                 PacketKey.CB_JOIN_GAME -> {
                     // 收到 play 首包后才上报会话公钥（对齐 MCC OnGameJoined 时序）。
@@ -474,6 +659,8 @@ class MinecraftClient(
                     ctx.writeAndFlush(ka)
                 }
                 PacketKey.CB_SYSTEM_CHAT -> emitSystemChat(buf)
+                PacketKey.CB_RESOURCE_PACK -> receiveResourcePack(ctx, buf)
+                PacketKey.CB_REMOVE_RESOURCE_PACK -> removeResourcePack(buf)
                 PacketKey.CB_PLAYER_CHAT -> emitPlayerChat(buf)
                 PacketKey.CB_COMMAND_SUGGESTIONS -> updateCommandSuggestions(buf)
                 PacketKey.CB_DECLARE_COMMANDS -> skipDeclareCommands(buf)
@@ -481,11 +668,13 @@ class MinecraftClient(
                 PacketKey.CB_UPDATE_HEALTH -> {
                     val health = buf.readFloat()
                     playerDead = health <= 0f
+                    inventoryTracker?.setAlive(!playerDead)
                 }
                 PacketKey.CB_RESPAWN -> {
                     // Respawn 同时用于死亡重生和换维度。它不重置连接级聊天链，只恢复发送能力。
                     // 死亡期间的聊天已在 sendChat 入口拦截，因此 messageIndex 始终与服务端保持连续。
                     playerDead = false
+                    inventoryTracker?.setAlive(true)
                 }
                 else -> Unit
             }
@@ -496,6 +685,8 @@ class MinecraftClient(
          * 客户端必须回 Acknowledge Configuration 并切回 CONFIGURATION；否则服务端会等待超时后断开。
          */
         private fun acknowledgeConfiguration(ctx: ChannelHandlerContext) {
+            resetInventory()
+            inventoryCodec?.registries?.clear()
             val sbId = palette.sbId(PacketKey.SB_ACKNOWLEDGE_CONFIGURATION) ?: return
             val ack = ctx.alloc().buffer().writeVarInt(sbId)
             ctx.writeAndFlush(ack)
@@ -711,6 +902,8 @@ class MinecraftClient(
         }
 
         override fun channelInactive(ctx: ChannelHandlerContext) {
+            _resourcePacks.value = emptyList()
+            resetInventory()
             setupTimeout?.cancel(false)
             setupTimeout = null
             latestCommandSuggestionInput = ""

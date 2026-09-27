@@ -11,6 +11,8 @@ import com.bilicraft.handheld.externalplugin.ExternalPluginManager
 import com.bilicraft.handheld.pluginmarket.OfficialPluginMarketRepository
 import com.bilicraft.handheld.protocol.MinecraftTranslations
 import com.bilicraft.handheld.session.SessionController
+import com.bilicraft.handheld.resourcepack.ResourcePackRepository
+import java.io.File
 import com.bilicraft.handheld.storage.SecureStore
 import com.bilicraft.handheld.update.UpdateClient
 import com.bilicraft.handheld.update.UpdateManager
@@ -49,6 +51,8 @@ object AppContainer {
         private set
     lateinit var announcementRepository: AnnouncementRepository
         private set
+    lateinit var vanillaItemIcons: com.bilicraft.handheld.resourcepack.ResourcePackItemIcons
+        private set
 
     fun init(context: Context) {
         if (initialized) return
@@ -62,7 +66,17 @@ object AppContainer {
             authManager = AuthManager(AuthClient(BuildConfig.MS_CLIENT_ID), secureStore)
             versionRepo = VersionRepository(app)
             uiConfigRepo = UiConfigRepository(app)
-            session = SessionController(authManager, versionRepo)
+            val vanillaFile = File(app.filesDir, "vanilla-items-1.21.11.zip")
+            // The bundled archive is authoritative. Refresh it on process start after an app update.
+            app.assets.open("minecraft/vanilla-items-1.21.11.zip").use { input -> vanillaFile.outputStream().use { input.copyTo(it) } }
+            val vanillaArchive = com.bilicraft.handheld.resourcepack.ResourcePackArchive(vanillaFile)
+            val headSkins = com.bilicraft.handheld.resourcepack.PlayerHeadSkins(File(app.cacheDir, "player-head-skins"))
+            vanillaItemIcons = com.bilicraft.handheld.resourcepack.ResourcePackItemIcons(listOf(vanillaArchive), headSkins)
+            session = SessionController(authManager, versionRepo, ResourcePackRepository(File(app.filesDir, "resource-packs"), vanillaArchive, headSkins),
+                inventoryCodecFactory = {
+                    fun readAsset(name: String) = org.json.JSONObject(app.assets.open("minecraft/inventory-774/$name.json").bufferedReader().use { it.readText() })
+                    com.bilicraft.handheld.protocol.InventoryCodec(readAsset("slot-schema"), readAsset("items"), readAsset("item-components"))
+                })
             updateManager = UpdateManager(
                 appContext = app,
                 client = UpdateClient(owner = "yangyv1016", repo = "bilicraft-handheld"),

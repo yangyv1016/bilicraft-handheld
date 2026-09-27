@@ -38,6 +38,10 @@ enum class PacketKey(val phase: PacketPhase) {
     SB_CONFIG_FINISH_ACK(PacketPhase.CONFIGURATION),    // 确认 configuration 结束（进入 play）
     SB_CONFIG_KEEP_ALIVE(PacketPhase.CONFIGURATION),
     SB_CONFIG_RESOURCE_PACK_RESPONSE(PacketPhase.CONFIGURATION), // 配置阶段资源包状态
+    SB_RESOURCE_PACK_RESPONSE(PacketPhase.PLAY),
+    SB_INVENTORY_CLICK(PacketPhase.PLAY),
+    SB_CLOSE_CONTAINER(PacketPhase.PLAY),
+    SB_HELD_SLOT(PacketPhase.PLAY),
     SB_KEEP_ALIVE_PLAY(PacketPhase.PLAY),
     SB_CHAT_MESSAGE(PacketPhase.PLAY),                  // play 阶段发送聊天
     SB_CHAT_COMMAND(PacketPhase.PLAY),                  // 1.19+ 斜杠命令走独立包（非 Chat Message）
@@ -56,6 +60,17 @@ enum class PacketKey(val phase: PacketPhase) {
     CB_CONFIG_FINISH(PacketPhase.CONFIGURATION),
     CB_CONFIG_KEEP_ALIVE(PacketPhase.CONFIGURATION),
     CB_CONFIG_RESOURCE_PACK(PacketPhase.CONFIGURATION),
+    CB_CONFIG_REMOVE_RESOURCE_PACK(PacketPhase.CONFIGURATION),
+    CB_CONFIG_REGISTRY(PacketPhase.CONFIGURATION),
+    CB_INVENTORY_CONTENT(PacketPhase.PLAY),
+    CB_INVENTORY_SLOT(PacketPhase.PLAY),
+    CB_INVENTORY_CURSOR(PacketPhase.PLAY),
+    CB_PLAYER_INVENTORY(PacketPhase.PLAY),
+    CB_HELD_SLOT(PacketPhase.PLAY),
+    CB_OPEN_CONTAINER(PacketPhase.PLAY),
+    CB_CLOSE_CONTAINER(PacketPhase.PLAY),
+    CB_RESOURCE_PACK(PacketPhase.PLAY),
+    CB_REMOVE_RESOURCE_PACK(PacketPhase.PLAY),
     CB_CONFIG_DISCONNECT(PacketPhase.CONFIGURATION),
     CB_PLAY_DISCONNECT(PacketPhase.PLAY),
     CB_JOIN_GAME(PacketPhase.PLAY),                     // play 首包 Login(play)：会话公钥须在此之后上报
@@ -135,6 +150,9 @@ object PaletteRegistry {
                 PacketKey.SB_CONFIG_FINISH_ACK to 0x03,
                 PacketKey.SB_CONFIG_KEEP_ALIVE to 0x04,
                 *(if (protocol >= 765) arrayOf(PacketKey.SB_CONFIG_RESOURCE_PACK_RESPONSE to 0x06) else emptyArray()),
+                *(if (protocol == 774) arrayOf(PacketKey.SB_RESOURCE_PACK_RESPONSE to 0x30,
+                    PacketKey.SB_INVENTORY_CLICK to 0x11, PacketKey.SB_CLOSE_CONTAINER to 0x12,
+                    PacketKey.SB_HELD_SLOT to 0x34) else emptyArray()),
                 PacketKey.SB_KEEP_ALIVE_PLAY to play.sbKeepAlive,
                 PacketKey.SB_CHAT_MESSAGE to play.sbChatMessage,
                 PacketKey.SB_CHAT_COMMAND to play.sbChatCommand,
@@ -153,6 +171,17 @@ object PaletteRegistry {
                 PacketKey.CB_CONFIG_FINISH to 0x03,
                 PacketKey.CB_CONFIG_KEEP_ALIVE to 0x04,
                 *(if (protocol >= 765) arrayOf(PacketKey.CB_CONFIG_RESOURCE_PACK to 0x09) else emptyArray()),
+                *(if (protocol >= 765) arrayOf(PacketKey.CB_CONFIG_REMOVE_RESOURCE_PACK to 0x08) else emptyArray()),
+                // 1.21.11 resource-pack IDs verified against minecraft-data; other PLAY versions remain unregistered.
+                *(if (protocol == 774) arrayOf(
+                    PacketKey.CB_CONFIG_REGISTRY to 0x07,
+                    PacketKey.CB_INVENTORY_CONTENT to 0x12, PacketKey.CB_INVENTORY_SLOT to 0x14,
+                    PacketKey.CB_INVENTORY_CURSOR to 0x5E, PacketKey.CB_PLAYER_INVENTORY to 0x6A,
+                    PacketKey.CB_HELD_SLOT to 0x67, PacketKey.CB_OPEN_CONTAINER to 0x39,
+                    PacketKey.CB_CLOSE_CONTAINER to 0x11,
+                    PacketKey.CB_RESOURCE_PACK to 0x4F,
+                    PacketKey.CB_REMOVE_RESOURCE_PACK to 0x4E
+                ) else emptyArray()),
                 PacketKey.CB_CONFIG_DISCONNECT to 0x02,
                 PacketKey.CB_PLAY_DISCONNECT to play.cbDisconnect,
                 PacketKey.CB_JOIN_GAME to play.cbJoinGame,

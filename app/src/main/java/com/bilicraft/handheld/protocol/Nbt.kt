@@ -2,20 +2,21 @@ package com.bilicraft.handheld.protocol
 
 import io.netty.buffer.ByteBuf
 import java.io.IOException
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
- * 最小 NBT 子系统。只服务一个目的：解析 1.20.3(协议765)+ 服务器以「网络 NBT」
- * 形式下发的聊天文本组件，供 ChatComponent 归一化为纯文本。
+ * 网络 NBT 读取器，用于聊天文本、配置注册表和背包组件。
  *
  * 不追求完整 NBT 规范（不写、不落盘、不处理压缩），只覆盖文本组件会出现的 tag：
  *   Byte / Short / Int / Long / Float / Double / String / List / Compound
- *   以及三类数组（Byte/Int/Long Array，聊天里罕见但按规范兜底跳过内容）。
+ *   Int Array 归一化为整数列表（玩家资料 UUID）；Byte/Long Array 按规范跳过内容。
  *
  * 关键差异（易错点）：
  *   - 「网络 NBT」根标签**没有名字**：类型字节之后直接是 payload，不像磁盘 NBT 带一个根名。
  *     1.20.2(764) 起客户端收到的组件即为此形态。
  *   - NBT 字符串长度是**无符号 short**（2 字节），编码为 Java modified-UTF-8；
- *     聊天文本几乎都是 BMP 字符，这里按标准 UTF-8 解析即可覆盖。
+ *     通过 modified-UTF-8 读取，以保留补充平面字符和空字符。
  */
 sealed interface NbtTag {
     data class NbtByte(val value: Byte) : NbtTag
@@ -35,6 +36,19 @@ sealed interface NbtTag {
  * 与 McTypes 的原语风格一致。
  */
 object Nbt {
+
+    /** JSON text components and network NBT share the same semantic tree. */
+    fun fromJson(value: Any?): NbtTag = when (value) {
+        null, JSONObject.NULL -> NbtTag.NbtEnd
+        is JSONObject -> NbtTag.NbtCompound(value.keys().asSequence().associateWith { fromJson(value.get(it)) })
+        is JSONArray -> NbtTag.NbtList(List(value.length()) { fromJson(value.get(it)) })
+        is String -> NbtTag.NbtString(value)
+        is Boolean -> NbtTag.NbtByte(if (value) 1 else 0)
+        is Int -> NbtTag.NbtInt(value)
+        is Long -> NbtTag.NbtLong(value)
+        is Number -> NbtTag.NbtDouble(value.toDouble())
+        else -> throw IOException("Unsupported JSON component value: ${value.javaClass.simpleName}")
+    }
 
     // tag 类型号（NBT 规范固定值）
     private const val TAG_END = 0
@@ -58,59 +72,70 @@ object Nbt {
     fun ByteBuf.readNetworkNbt(): NbtTag {
         val rootType = readByte().toInt()
         if (rootType == TAG_END) return NbtTag.NbtEnd
-        return readPayload(rootType)
+        return readPayload(rootType, 0)
     }
 
     /** 按 tag 类型读取其 payload（不含名字，名字由调用方在 compound 内处理） */
-    private fun ByteBuf.readPayload(type: Int): NbtTag = when (type) {
-        TAG_BYTE -> NbtTag.NbtByte(readByte())
-        TAG_SHORT -> NbtTag.NbtShort(readShort())
-        TAG_INT -> NbtTag.NbtInt(readInt())
-        TAG_LONG -> NbtTag.NbtLong(readLong())
-        TAG_FLOAT -> NbtTag.NbtFloat(readFloat())
-        TAG_DOUBLE -> NbtTag.NbtDouble(readDouble())
-        TAG_STRING -> NbtTag.NbtString(readNbtString())
-        TAG_LIST -> readListPayload()
-        TAG_COMPOUND -> readCompoundPayload()
-        TAG_BYTE_ARRAY -> { skipArray(elementBytes = 1); NbtTag.NbtEnd }
-        TAG_INT_ARRAY -> { skipArray(elementBytes = 4); NbtTag.NbtEnd }
-        TAG_LONG_ARRAY -> { skipArray(elementBytes = 8); NbtTag.NbtEnd }
-        else -> throw IOException("未知 NBT tag 类型: $type")
+    private fun ByteBuf.readPayload(type: Int, depth: Int): NbtTag {
+        require(depth < 64) { "NBT 嵌套过深" }
+        return when (type) {
+            TAG_BYTE -> NbtTag.NbtByte(readByte())
+            TAG_SHORT -> NbtTag.NbtShort(readShort())
+            TAG_INT -> NbtTag.NbtInt(readInt())
+            TAG_LONG -> NbtTag.NbtLong(readLong())
+            TAG_FLOAT -> NbtTag.NbtFloat(readFloat())
+            TAG_DOUBLE -> NbtTag.NbtDouble(readDouble())
+            TAG_STRING -> NbtTag.NbtString(readNbtString())
+            TAG_LIST -> readListPayload(depth + 1)
+            TAG_COMPOUND -> readCompoundPayload(depth + 1)
+            TAG_BYTE_ARRAY -> { skipArray(elementBytes = 1); NbtTag.NbtEnd }
+            TAG_INT_ARRAY -> {
+                val length = readInt()
+                require(length in 0..65536 && length <= readableBytes() / 4) { "NBT 整数数组长度无效" }
+                NbtTag.NbtList(List(length) { NbtTag.NbtInt(readInt()) })
+            }
+            TAG_LONG_ARRAY -> { skipArray(elementBytes = 8); NbtTag.NbtEnd }
+            else -> throw IOException("未知 NBT tag 类型: $type")
+        }
     }
 
     /** List payload：[元素类型(1B)][长度(4B)][元素...] */
-    private fun ByteBuf.readListPayload(): NbtTag {
+    private fun ByteBuf.readListPayload(depth: Int): NbtTag {
         val elementType = readByte().toInt()
         val length = readInt()
-        if (length <= 0) return NbtTag.NbtList(emptyList())
+        require(length in 0..65536 && length <= readableBytes()) { "NBT 列表长度无效" }
+        if (length == 0) return NbtTag.NbtList(emptyList())
         val items = ArrayList<NbtTag>(length)
-        repeat(length) { items.add(readPayload(elementType)) }
+        repeat(length) { items.add(readPayload(elementType, depth)) }
         return NbtTag.NbtList(items)
     }
 
     /** Compound payload：连续的 [类型(1B)][名字(String)][payload]，遇 TAG_End 结束 */
-    private fun ByteBuf.readCompoundPayload(): NbtTag {
+    private fun ByteBuf.readCompoundPayload(depth: Int): NbtTag {
         val entries = LinkedHashMap<String, NbtTag>()
         while (true) {
             val type = readByte().toInt()
             if (type == TAG_END) break
             val name = readNbtString()
-            entries[name] = readPayload(type)
+            require(entries.size < 65536) { "NBT 对象过大" }
+            entries[name] = readPayload(type, depth)
         }
         return NbtTag.NbtCompound(entries)
     }
 
-    /** NBT 字符串：无符号 short 长度前缀 + UTF-8 内容 */
+    /** NBT 字符串：无符号 short 长度前缀 + Java modified-UTF-8 内容 */
     private fun ByteBuf.readNbtString(): String {
         val len = readUnsignedShort()
         val bytes = ByteArray(len)
         readBytes(bytes)
-        return String(bytes, Charsets.UTF_8)
+        val encoded = byteArrayOf((len ushr 8).toByte(), len.toByte()) + bytes
+        return java.io.DataInputStream(encoded.inputStream()).use { it.readUTF() }
     }
 
     /** 数组类 tag：[长度(4B)][length*elementBytes]，聊天组件用不到内容，读长度后跳过 */
     private fun ByteBuf.skipArray(elementBytes: Int) {
         val length = readInt()
-        if (length > 0) skipBytes(length * elementBytes)
+        require(length >= 0 && length <= readableBytes() / elementBytes) { "NBT 数组长度无效" }
+        skipBytes(length * elementBytes)
     }
 }

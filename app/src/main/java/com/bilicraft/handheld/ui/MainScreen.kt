@@ -116,15 +116,10 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -143,6 +138,9 @@ import com.bilicraft.handheld.externalplugin.ExternalPluginEntrypoint
 import com.bilicraft.handheld.externalplugin.ExternalPluginPanelHandle
 import com.bilicraft.handheld.pluginmarket.OfficialPluginMarketEntry
 import com.bilicraft.handheld.protocol.ChatEvent
+import com.bilicraft.handheld.protocol.ChatHover
+import com.bilicraft.handheld.protocol.ChatClick
+import com.bilicraft.handheld.protocol.ChatSpan
 import com.bilicraft.handheld.protocol.CommandSuggestion
 import com.bilicraft.handheld.protocol.CommandSuggestionState
 import com.bilicraft.handheld.protocol.CommandSuggestions
@@ -173,6 +171,23 @@ private const val ABOUT_EASTER_EGG_TAP_COUNT = 5
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(vm: MainViewModel) {
+    val resourcePacks by vm.resourcePacks.collectAsStateWithLifecycle()
+    val inventory by vm.inventory.collectAsStateWithLifecycle()
+    inventory.menu?.let { menu ->
+        val serverId = inventory.serverId
+        if (serverId != null) androidx.compose.runtime.CompositionLocalProvider(
+            LocalResourcePackFonts provides resourcePacks.fonts.takeIf { resourcePacks.serverId == serverId },
+            LocalResourcePackItemIcons provides (resourcePacks.icons.takeIf { resourcePacks.serverId == serverId } ?: com.bilicraft.handheld.AppContainer.vanillaItemIcons)
+        ) {
+            androidx.compose.runtime.key(serverId, menu.generation) {
+                ServerMenuScreen(inventory, menu, onClose = { vm.closeServerMenu(serverId, menu.generation) },
+                    onClick = { slot, button, revision -> vm.clickServerMenu(serverId, menu.generation, slot, button, revision) })
+            }
+        }
+    }
+    resourcePacks.entries.firstOrNull { it.stage == com.bilicraft.handheld.resourcepack.PackStage.Consent }?.let { entry ->
+        ResourcePackConsentDialog(entry, { vm.acceptResourcePack(entry.request) }, { vm.declineResourcePack(entry.request) })
+    }
     val uiMessage by vm.uiMessage.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var selectedTab by rememberSaveable { mutableStateOf(MainTab.Sessions) }
@@ -298,6 +313,11 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
     var menuServer by remember { mutableStateOf<ServerConfig?>(null) }
     var showPluginEntrypoints by remember { mutableStateOf(false) }
     var showTopMenu by remember { mutableStateOf(false) }
+    var showResourcePacks by remember { mutableStateOf(false) }
+    var inventoryServerId by remember { mutableStateOf<String?>(null) }
+    var pendingItemShow by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val inventory by vm.inventory.collectAsStateWithLifecycle()
+    val packState by vm.resourcePacks.collectAsStateWithLifecycle()
     var showQuickCommands by remember { mutableStateOf(false) }
     var showQuickCommandEditor by remember { mutableStateOf(false) }
     var editingQuickCommand by remember { mutableStateOf<QuickCommandConfig?>(null) }
@@ -366,6 +386,16 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
                         onDismissRequest = { showTopMenu = false }
                     ) {
                         DropdownMenuItem(
+                            text = { Text("背包") },
+                            onClick = { showTopMenu = false; inventoryServerId = currentServerId },
+                            enabled = currentServerId != null && runtime.activeServerId == currentServerId &&
+                                runtime.connectionStates[currentServerId] is ConnectionState.Connected
+                        )
+                        DropdownMenuItem(
+                            text = { Text("服务器资源包") },
+                            onClick = { showTopMenu = false; showResourcePacks = true }
+                        )
+                        DropdownMenuItem(
                             text = { Text("快捷指令") },
                             leadingIcon = { Icon(Icons.Default.Terminal, contentDescription = null) },
                             onClick = {
@@ -406,24 +436,56 @@ private fun ServerSessionsScreen(vm: MainViewModel) {
                 val selectedConn = runtime.connectionStates[selectedServer.id] ?: ConnectionState.Disconnected
                 val selectedLog = runtime.chatLogs[selectedServer.id].orEmpty()
                 val isActiveServer = runtime.activeServerId == selectedServer.id
-                serverSessionStateHolder.SaveableStateProvider(selectedServer.id) {
-                    ServerSessionPage(
-                        server = selectedServer,
-                        conn = selectedConn,
-                        log = selectedLog,
-                        isActiveServer = isActiveServer,
-                        chatAutoScroll = preferences.chatAutoScroll,
-                        commandCompletionEnabled = preferences.commandCompletionEnabled,
-                        commandSuggestions = commandSuggestions,
-                        onConnect = { vm.connect(selectedServer) },
-                        onStop = vm::stopConnection,
-                        onSend = { vm.sendChat(selectedServer.id, it) },
-                        onRequestCommandSuggestions = { vm.requestCommandSuggestions(selectedServer.id, it) },
-                        onEdit = { editingServer = selectedServer }
-                    )
+                androidx.compose.runtime.CompositionLocalProvider(
+                    LocalResourcePackFonts provides packState.fonts.takeIf { packState.serverId == selectedServer.id },
+                    LocalResourcePackItemIcons provides (packState.icons.takeIf { packState.serverId == selectedServer.id } ?: com.bilicraft.handheld.AppContainer.vanillaItemIcons)
+                ) {
+                    serverSessionStateHolder.SaveableStateProvider(selectedServer.id) {
+                        ServerSessionPage(
+                            server = selectedServer,
+                            conn = selectedConn,
+                            log = selectedLog,
+                            isActiveServer = isActiveServer,
+                            chatAutoScroll = preferences.chatAutoScroll,
+                            commandCompletionEnabled = preferences.commandCompletionEnabled,
+                            commandSuggestions = commandSuggestions,
+                            itemShowCode = pendingItemShow?.takeIf { it.first == selectedServer.id }?.second,
+                            onItemShowConsumed = { pendingItemShow = null },
+                            onConnect = { vm.connect(selectedServer) },
+                            onStop = vm::stopConnection,
+                            onSend = { vm.sendChat(selectedServer.id, it) },
+                            onRequestCommandSuggestions = { vm.requestCommandSuggestions(selectedServer.id, it) },
+                            onEdit = { editingServer = selectedServer }
+                        )
+                    }
                 }
             }
         }
+    }
+
+    LaunchedEffect(inventory.menu?.generation) {
+        if (inventory.menu != null) inventoryServerId = null
+    }
+    inventoryServerId?.takeIf { inventory.menu == null }?.let { serverId ->
+        androidx.compose.runtime.CompositionLocalProvider(
+            LocalResourcePackFonts provides packState.fonts.takeIf { packState.serverId == serverId },
+            LocalResourcePackItemIcons provides (packState.icons.takeIf { packState.serverId == serverId } ?: com.bilicraft.handheld.AppContainer.vanillaItemIcons)
+        ) {
+            InventoryScreen(if (inventory.serverId == serverId) inventory else com.bilicraft.handheld.protocol.InventoryState(),
+                onClose = { inventoryServerId = null },
+                onAction = { action, revision -> vm.performInventoryAction(serverId, action, revision) },
+                onSelectHotbar = { vm.selectHotbar(serverId, it) },
+                onShowItem = { hotbarNumber ->
+                    pendingItemShow = serverId to "%$hotbarNumber"
+                    inventoryServerId = null
+                })
+        }
+    }
+    if (showResourcePacks) {
+        ResourcePackStatusDialog(
+            if (packState.serverId == currentServerId) packState else com.bilicraft.handheld.resourcepack.ResourcePackState(),
+            onDismiss = { showResourcePacks = false }
+        )
     }
 
     if (showCreateDialog) {
@@ -545,6 +607,8 @@ private fun ServerSessionPage(
     chatAutoScroll: Boolean,
     commandCompletionEnabled: Boolean,
     commandSuggestions: CommandSuggestionState,
+    itemShowCode: String?,
+    onItemShowConsumed: () -> Unit,
     onConnect: () -> Unit,
     onStop: () -> Unit,
     onSend: (String) -> Unit,
@@ -552,9 +616,18 @@ private fun ServerSessionPage(
     onEdit: () -> Unit
 ) {
     val connected = isActiveServer && conn is ConnectionState.Connected
+    val context = LocalContext.current
     val connecting = isActiveServer && conn !is ConnectionState.Disconnected && conn !is ConnectionState.Failed
     var input by remember(server.id) { mutableStateOf(TextFieldValue("")) }
     var showAllSuggestions by rememberSaveable(server.id) { mutableStateOf(false) }
+
+    LaunchedEffect(itemShowCode) {
+        if (itemShowCode != null) {
+            val text = input.text + (if (input.text.isNotEmpty() && !input.text.last().isWhitespace()) " " else "") + itemShowCode
+            input = TextFieldValue(text, selection = TextRange(text.length))
+            onItemShowConsumed()
+        }
+    }
 
     LaunchedEffect(input.text, connected, commandCompletionEnabled) {
         if (!connected || !commandCompletionEnabled || !input.text.startsWith("/")) {
@@ -588,7 +661,15 @@ private fun ServerSessionPage(
         )
 
         Spacer(Modifier.height(12.dp))
-        ChatLog(log = log, autoScroll = chatAutoScroll, modifier = Modifier.weight(1f).fillMaxWidth())
+        ChatLog(log = log, autoScroll = chatAutoScroll, modifier = Modifier.weight(1f).fillMaxWidth(),
+            onClickEvent = { action ->
+                if (!connected) {
+                    Toast.makeText(context, "请先连接此服务器", Toast.LENGTH_SHORT).show()
+                } else when (action) {
+                    is ChatClick.RunCommand -> onSend(action.command)
+                    is ChatClick.SuggestCommand -> input = TextFieldValue(action.command, selection = TextRange(action.command.length))
+                }
+            })
         if (visibleSuggestions != null) {
             Spacer(Modifier.height(8.dp))
             CommandSuggestionBar(
@@ -893,10 +974,21 @@ private fun CommandSuggestionSheet(
 }
 
 @Composable
-private fun ChatLog(log: List<ChatEvent>, autoScroll: Boolean, modifier: Modifier = Modifier) {
+internal fun ChatLog(
+    log: List<ChatEvent>, autoScroll: Boolean, modifier: Modifier = Modifier,
+    onClickEvent: ((ChatClick) -> Unit)? = null
+) {
     val listState = rememberLazyListState()
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
+    var selectedDetails by remember { mutableStateOf<ChatSpan?>(null) }
+    selectedDetails?.let { span ->
+        span.hover?.let { hover ->
+            ChatDetailsDialog(hover, onDismiss = { selectedDetails = null },
+                action = span.click.takeIf { onClickEvent != null },
+                onAction = { action -> selectedDetails = null; onClickEvent?.invoke(action) })
+        }
+    }
     LaunchedEffect(log.size, log.lastOrNull(), autoScroll) {
         if (!autoScroll || log.isEmpty()) return@LaunchedEffect
 
@@ -925,19 +1017,22 @@ private fun ChatLog(log: List<ChatEvent>, autoScroll: Boolean, modifier: Modifie
             item { Text("聊天记录为空", color = CHAT_DEFAULT_TEXT, style = MaterialTheme.typography.bodyMedium) }
         }
         items(log) { ev ->
-            Text(
-                text = ev.toAnnotated(),
-                style = MaterialTheme.typography.bodyMedium,
+            MinecraftText(
+                spans = ev.spans.ifEmpty { listOf(ChatSpan(ev.plainText)) },
                 color = CHAT_DEFAULT_TEXT,
                 maxLines = 8,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        clipboardManager.setText(AnnotatedString(ev.plainText))
-                        Toast.makeText(context, "已复制聊天内容", Toast.LENGTH_SHORT).show()
+                onHover = { selectedDetails = ChatSpan("", hover = it) },
+                onClickEvent = onClickEvent?.let { perform ->
+                    { span ->
+                        if (span.hover != null) selectedDetails = span
+                        else span.click?.let(perform)
                     }
-                    .padding(vertical = 2.dp)
+                },
+                onCopy = {
+                    clipboardManager.setText(AnnotatedString(ev.plainText))
+                    Toast.makeText(context, "已复制聊天内容", Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
             )
         }
     }
@@ -2774,28 +2869,6 @@ private const val CDK_ACTIVE_WINDOW_REFRESH_MS = 60_000L
 private const val CDK_COPY_FEEDBACK_MS = 1_600L
 private const val MAX_VISIBLE_COMMAND_SUGGESTIONS = 6
 
-private fun ChatEvent.toAnnotated(): AnnotatedString {
-    if (spans.isEmpty()) return AnnotatedString(plainText)
-    return buildAnnotatedString {
-        spans.forEach { span ->
-            withStyle(
-                SpanStyle(
-                    color = span.color?.let { Color(0xFF000000.toInt() or it) } ?: Color.Unspecified,
-                    fontWeight = if (span.bold) FontWeight.Bold else null,
-                    fontStyle = if (span.italic) FontStyle.Italic else null,
-                    textDecoration = when {
-                        span.underline && span.strikethrough -> TextDecoration.combine(
-                            listOf(TextDecoration.Underline, TextDecoration.LineThrough)
-                        )
-                        span.underline -> TextDecoration.Underline
-                        span.strikethrough -> TextDecoration.LineThrough
-                        else -> null
-                    }
-                )
-            ) { append(span.text) }
-        }
-    }
-}
 
 private fun statusText(state: ConnectionState): String = when (state) {
     is ConnectionState.Connected -> "已连接"

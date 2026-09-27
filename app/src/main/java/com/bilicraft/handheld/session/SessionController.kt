@@ -12,6 +12,10 @@ import com.bilicraft.handheld.protocol.MinecraftClient
 import com.bilicraft.handheld.protocol.PaletteRegistry
 import com.bilicraft.handheld.protocol.ServerAddress
 import com.bilicraft.handheld.protocol.ServerPinger
+import com.bilicraft.handheld.protocol.ResourcePackRequest
+import com.bilicraft.handheld.resourcepack.ResourcePackRepository
+import com.bilicraft.handheld.resourcepack.ResourcePackSession
+import com.bilicraft.handheld.resourcepack.ResourcePackState
 import com.bilicraft.handheld.storage.AuthSession
 import com.bilicraft.handheld.version.McVersion
 import com.bilicraft.handheld.version.VersionRepository
@@ -57,6 +61,8 @@ sealed interface SessionEvent {
 class SessionController(
     private val authManager: AuthManager,
     private val versionRepo: VersionRepository,
+    private val resourcePackRepository: ResourcePackRepository,
+    private val inventoryCodecFactory: () -> com.bilicraft.handheld.protocol.InventoryCodec,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 ) {
     // 聚合的聊天记录（UI 展示；含系统提示）
@@ -68,6 +74,16 @@ class SessionController(
 
     private val _commandSuggestions = MutableStateFlow(CommandSuggestions.Empty)
     val commandSuggestions: StateFlow<CommandSuggestionState> = _commandSuggestions.asStateFlow()
+
+    private val _inventory = MutableStateFlow(com.bilicraft.handheld.protocol.InventoryState())
+    val inventory = _inventory.asStateFlow()
+
+    private val _resourcePacks = MutableStateFlow(ResourcePackState())
+    val resourcePacks = _resourcePacks.asStateFlow()
+    private var resourcePackSession: ResourcePackSession? = null
+
+    fun acceptResourcePack(request: ResourcePackRequest) { resourcePackSession?.accept(request) }
+    fun declineResourcePack(request: ResourcePackRequest) { resourcePackSession?.decline(request) }
 
     private val _events = MutableSharedFlow<SessionEvent>(extraBufferCapacity = 256)
     val events: SharedFlow<SessionEvent> = _events.asSharedFlow()
@@ -112,6 +128,10 @@ class SessionController(
         activeRequest = request
         publishState(request, ConnectionState.Connecting)
         previousClient?.disconnect()
+        resourcePackSession?.close()
+        resourcePackSession = null
+        _resourcePacks.value = ResourcePackState()
+        _inventory.value = com.bilicraft.handheld.protocol.InventoryState()
         reconnectAllowed = true
         scope.launch { connectOnce(request, attempt = 0) }
     }
@@ -127,7 +147,27 @@ class SessionController(
         client = null
         _commandSuggestions.value = CommandSuggestions.Empty
         previousClient?.disconnect()
+        resourcePackSession?.close()
+        resourcePackSession = null
+        _resourcePacks.value = ResourcePackState()
+        _inventory.value = com.bilicraft.handheld.protocol.InventoryState()
         publishState(stoppedServerId, ConnectionState.Disconnected)
+    }
+
+    fun performInventoryAction(serverId: String, action: com.bilicraft.handheld.protocol.InventoryAction, revision: Long) {
+        if (activeRequest?.serverId == serverId) client?.performInventoryAction(action, revision)
+    }
+
+    fun selectHotbar(serverId: String, slot: Int) {
+        if (activeRequest?.serverId == serverId) client?.selectHotbar(slot)
+    }
+
+    fun clickServerMenu(serverId: String, generation: Long, slot: Int, button: Int, revision: Long) {
+        if (activeRequest?.serverId == serverId) client?.clickServerMenu(generation, slot, button, revision)
+    }
+
+    fun closeServerMenu(serverId: String, generation: Long) {
+        if (activeRequest?.serverId == serverId) client?.closeServerMenu(generation)
     }
 
     fun sendChat(text: String) {
@@ -195,6 +235,7 @@ class SessionController(
 
         val mc = MinecraftClient(
             palette = PaletteRegistry.forProtocol(protocol),
+            inventoryCodec = if (protocol == 774) inventoryCodecFactory() else null,
             protocolNumber = protocol,
             accessToken = session.mcAccessToken,
             playerName = session.mcUsername,
@@ -204,10 +245,23 @@ class SessionController(
             certificate = certificate
         )
         client = mc
+        resourcePackSession?.close()
+        val packs = ResourcePackSession(resourcePackRepository, "${addr.host}:${addr.port}", request.serverId, mc)
+        resourcePackSession = packs
 
         // 泵：把 client 的状态与聊天接到本控制器
         pumpJob?.cancel()
         pumpJob = scope.launch {
+            launch {
+                mc.inventory.collect { state ->
+                    if (request.isCurrent()) _inventory.value = state.copy(serverId = request.serverId)
+                }
+            }
+            launch {
+                packs.state.collect { state ->
+                    if (request.isCurrent()) _resourcePacks.value = state
+                }
+            }
             launch {
                 var connectionStarted = false
                 mc.state.collect { state ->

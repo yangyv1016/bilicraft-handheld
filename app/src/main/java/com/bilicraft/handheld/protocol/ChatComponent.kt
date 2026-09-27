@@ -28,7 +28,10 @@ object ChatComponent {
         val bold: Boolean = false,
         val italic: Boolean = false,
         val underline: Boolean = false,
-        val strikethrough: Boolean = false
+        val strikethrough: Boolean = false,
+        val font: String = "minecraft:default",
+        val hover: ChatHover? = null,
+        val click: ChatClick? = null
     )
 
     /** §x 传统颜色码 → RGB。索引即码字符（0-9 a-f）。 */
@@ -164,16 +167,19 @@ object ChatComponent {
             } ?: emptyList()
             appendTranslation(key, obj.optString("fallback", ""), args, style, out)
         }
-        obj.optJSONArray("extra")?.let { appendJsonArray(it, style, out) }
+        obj.optJSONArray("extra")?.let { appendJsonArray(it, style, out, inheritFirst = false) }
     }
 
-    private fun appendJsonArray(arr: JSONArray, inherited: Style, out: MutableList<ChatSpan>) {
+    private fun appendJsonArray(arr: JSONArray, inherited: Style, out: MutableList<ChatSpan>, inheritFirst: Boolean = true) {
+        val arrayStyle = if (inheritFirst) {
+            (arr.opt(0) as? JSONObject)?.let { mergeJsonStyle(it, inherited) } ?: inherited
+        } else inherited
         for (i in 0 until arr.length()) {
             when (val item = arr.get(i)) {
-                is JSONObject -> appendJson(item, inherited, out)
-                is JSONArray -> appendJsonArray(item, inherited, out)
-                is String -> appendLegacy(item, inherited, out)
-                else -> appendLegacy(item.toString(), inherited, out)
+                is JSONObject -> appendJson(item, arrayStyle, out)
+                is JSONArray -> appendJsonArray(item, arrayStyle, out)
+                is String -> appendLegacy(item, arrayStyle, out)
+                else -> appendLegacy(item.toString(), arrayStyle, out)
             }
         }
     }
@@ -185,6 +191,13 @@ object ChatComponent {
         italic = if (obj.has("italic")) obj.optBoolean("italic") else base.italic,
         underline = if (obj.has("underlined")) obj.optBoolean("underlined") else base.underline,
         strikethrough = if (obj.has("strikethrough")) obj.optBoolean("strikethrough") else base.strikethrough,
+        font = obj.optString("font", base.font),
+        hover = if (obj.has("hover_event") || obj.has("hoverEvent")) {
+            parseHover(Nbt.fromJson(obj.opt("hover_event") ?: obj.opt("hoverEvent")))
+        } else base.hover,
+        click = if (obj.has("click_event") || obj.has("clickEvent")) {
+            parseClick(Nbt.fromJson(obj.opt("click_event") ?: obj.opt("clickEvent")))
+        } else base.click,
     )
 
     /** 颜色字段解析：#RRGGBB 十六进制 或 命名色。无法识别返回 null（用默认色）。 */
@@ -198,7 +211,11 @@ object ChatComponent {
     private fun appendNbt(tag: NbtTag, inherited: Style, out: MutableList<ChatSpan>) {
         when (tag) {
             is NbtTag.NbtString -> appendLegacy(tag.value, inherited, out)
-            is NbtTag.NbtList -> tag.items.forEach { appendNbt(it, inherited, out) }
+            is NbtTag.NbtList -> {
+                val arrayStyle = (tag.items.firstOrNull() as? NbtTag.NbtCompound)
+                    ?.let { mergeNbtStyle(it, inherited) } ?: inherited
+                tag.items.forEach { appendNbt(it, arrayStyle, out) }
+            }
             is NbtTag.NbtCompound -> {
                 val style = mergeNbtStyle(tag, inherited)
                 (tag.entries["text"] as? NbtTag.NbtString)?.value
@@ -209,7 +226,7 @@ object ChatComponent {
                     val fallback = (tag.entries["fallback"] as? NbtTag.NbtString)?.value.orEmpty()
                     appendTranslation(keyTag.value, fallback, args, style, out)
                 }
-                tag.entries["extra"]?.let { appendNbt(it, style, out) }
+                (tag.entries["extra"] as? NbtTag.NbtList)?.items?.forEach { appendNbt(it, style, out) }
             }
             else -> Unit
         }
@@ -221,7 +238,45 @@ object ChatComponent {
         italic = nbtBool(tag.entries["italic"]) ?: base.italic,
         underline = nbtBool(tag.entries["underlined"]) ?: base.underline,
         strikethrough = nbtBool(tag.entries["strikethrough"]) ?: base.strikethrough,
+        font = (tag.entries["font"] as? NbtTag.NbtString)?.value ?: base.font,
+        hover = if ("hover_event" in tag.entries || "hoverEvent" in tag.entries) {
+            parseHover(tag.entries["hover_event"] ?: tag.entries["hoverEvent"])
+        } else base.hover,
+        click = if ("click_event" in tag.entries || "clickEvent" in tag.entries) {
+            parseClick(tag.entries["click_event"] ?: tag.entries["clickEvent"])
+        } else base.click,
     )
+
+    private fun parseClick(tag: NbtTag?): ChatClick? {
+        val event = (tag as? NbtTag.NbtCompound)?.entries ?: return null
+        val command = ((event["command"] ?: event["value"]) as? NbtTag.NbtString)?.value ?: return null
+        // Network text must not turn into multiple lines or invalid chat characters.
+        if (command.any { it < ' ' || it == '\u007f' || it == '\u00a7' }) return null
+        return when ((event["action"] as? NbtTag.NbtString)?.value) {
+            "run_command" -> command.removePrefix("/").takeIf { it.isNotBlank() }
+                ?.let { ChatClick.RunCommand("/$it") }
+            "suggest_command" -> ChatClick.SuggestCommand(command)
+            else -> null
+        }
+    }
+
+    private fun parseHover(tag: NbtTag?): ChatHover? {
+        val event = (tag as? NbtTag.NbtCompound)?.entries ?: return null
+        return when ((event["action"] as? NbtTag.NbtString)?.value) {
+            "show_text" -> (event["value"] ?: event["contents"])?.let {
+                ChatHover.Text(spansFromNbt(it))
+            }
+            "show_item" -> {
+                val item = (event["contents"] as? NbtTag.NbtCompound)?.entries ?: event
+                val id = (item["id"] as? NbtTag.NbtString)?.value ?: return null
+                val count = (item["count"] as? NbtTag.NbtInt)?.value ?: 1
+                if (id.isBlank() || count <= 0) return null
+                ChatHover.Item(ItemDetails(id, count,
+                    item["components"] as? NbtTag.NbtCompound ?: NbtTag.NbtCompound(emptyMap())))
+            }
+            else -> null
+        }
+    }
 
     /** NBT 布尔存为 Byte（0/1）。非 Byte 返回 null（表示该字段缺省）。 */
     private fun nbtBool(tag: NbtTag?): Boolean? = (tag as? NbtTag.NbtByte)?.value?.let { it.toInt() != 0 }
@@ -238,7 +293,8 @@ object ChatComponent {
         val run = StringBuilder()
         fun flush() {
             if (run.isNotEmpty()) {
-                out.add(ChatSpan(run.toString(), current.color, current.bold, current.italic, current.underline, current.strikethrough))
+                out.add(ChatSpan(run.toString(), current.color, current.bold, current.italic,
+                    current.underline, current.strikethrough, current.font, current.hover, current.click))
                 run.clear()
             }
         }

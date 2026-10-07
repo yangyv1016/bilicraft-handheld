@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { fetchWithRetry } from "./fetch-with-retry.mjs";
 import {
   mergeAnnouncements,
   normalizeManualIndex,
@@ -607,7 +608,7 @@ function assertSafeSegment(label, value) {
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     headers: githubHeaders("application/vnd.github+json")
   });
   if (!response.ok) {
@@ -617,7 +618,7 @@ async function fetchJson(url) {
 }
 
 async function fetchPublicJson(url) {
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     headers: {
       Accept: "application/json",
       "User-Agent": "bilicraft-cdn-sync"
@@ -630,7 +631,7 @@ async function fetchPublicJson(url) {
 }
 
 async function fetchBytes(url) {
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     headers: downloadHeaders()
   });
   if (!response.ok) {

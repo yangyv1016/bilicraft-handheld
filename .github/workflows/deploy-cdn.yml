@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/deploy-cdn.yml'
       - 'scripts/build-cdn.mjs'
+      - 'scripts/fetch-with-retry.mjs'
+      - 'scripts/fetch-with-retry.test.mjs'
       - 'scripts/announcement-utils.mjs'
       - 'scripts/announcement-utils.test.mjs'
       - 'scripts/publish-announcement.mjs'
@@ -41,8 +43,8 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Test CDN worker
-        run: node --test scripts/cdn-worker.test.mjs scripts/announcement-utils.test.mjs
+      - name: Test CDN scripts
+        run: node --test scripts/cdn-worker.test.mjs scripts/announcement-utils.test.mjs scripts/fetch-with-retry.test.mjs
 
       - name: Build CDN files
         env:

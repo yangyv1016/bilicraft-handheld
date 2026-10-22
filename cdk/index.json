@@ -1,7 +1,13 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-13T00:00:00Z",
+  "updatedAt": "2026-10-22T06:07:11Z",
   "entries": [
+    {
+      "id": "spotlight2026",
+      "title": "万众瞩目称号 CDK",
+      "code": "spotlight2026",
+      "description": "兑换金色「万众瞩目」称号。"
+    },
     {
       "id": "bilicraft-handle-public",
       "title": "Bilicraft Handheld 公共 CDK",
